@@ -1,0 +1,55 @@
+name: connany
+x-runtime: &runtime
+  NODE_ENV: production
+  PORT: 3000
+  PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?Set PUBLIC_BASE_URL in .env}
+  DATABASE_URL: postgres://connany:${POSTGRES_PASSWORD:?Set a URL-safe POSTGRES_PASSWORD in .env}@postgres:5432/connany
+  TOKEN_ENCRYPTION_KEY: ${TOKEN_ENCRYPTION_KEY:?Set TOKEN_ENCRYPTION_KEY in .env}
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: connany
+      POSTGRES_DB: connany
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U connany -d connany']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+  migrate:
+    image: connany:local
+    build:
+      context: ../..
+    environment: *runtime
+    command: [node, dist/scripts/migrate.js]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: 'no'
+  app:
+    image: connany:local
+    build:
+      context: ../..
+    restart: unless-stopped
+    init: true
+    environment: *runtime
+    ports:
+      - '127.0.0.1:${HTTP_PORT:-3000}:3000'
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      start_period: 20s
+      retries: 3
+    stop_grace_period: 30s
+volumes:
+  postgres-data:

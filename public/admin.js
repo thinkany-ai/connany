@@ -1,0 +1,227 @@
+(() => {
+  'use strict';
+  const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
+  const toast = document.querySelector('#toast');
+  let toastTimer;
+  function notify(message) {
+    toast.textContent = message; toast.hidden = false;
+    clearTimeout(toastTimer); toastTimer = setTimeout(() => { toast.hidden = true; }, 4500);
+  }
+  try { const notice = sessionStorage.getItem('connany_notice'); sessionStorage.removeItem('connany_notice'); if (notice) notify(notice); } catch {}
+  document.querySelectorAll('[data-copy]').forEach(button => button.addEventListener('click', async () => {
+    const input = document.getElementById(button.dataset.copy);
+    try { await navigator.clipboard.writeText(input.value); notify('已复制'); }
+    catch { input.focus(); input.select(); notify('已选中文本，请手动复制'); }
+  }));
+  const dialog = document.querySelector('#key-dialog');
+  function closeKey() { document.querySelector('#issued-key').value = ''; window.location.assign(dialog.dataset.return || '/admin/keys'); }
+  document.querySelector('#close-key').addEventListener('click', closeKey);
+  dialog.addEventListener('cancel', event => { event.preventDefault(); closeKey(); });
+  // Never persist full keys in local/session storage or expose them through a GET endpoint.
+  window.addEventListener('pagehide', () => { document.querySelector('#issued-key').value = ''; });
+  const accountMenu = document.querySelector('.account-menu');
+  const closeAccountMenu = () => { if (accountMenu) accountMenu.open = false; };
+  document.addEventListener('click', event => { if (accountMenu && !accountMenu.contains(event.target)) closeAccountMenu(); });
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && accountMenu?.open) { closeAccountMenu(); accountMenu.querySelector('summary').focus(); }
+  });
+  accountMenu?.querySelector('[data-dialog]')?.addEventListener('click', closeAccountMenu);
+  const settingsDialog = document.querySelector('#account-settings');
+  const settingsTabs = [...document.querySelectorAll('[data-settings-tab]')];
+  function selectSettingsTab(tab) {
+    settingsTabs.forEach(button => {
+      const selected = button === tab;
+      button.setAttribute('aria-selected', String(selected)); button.tabIndex = selected ? 0 : -1;
+      document.getElementById(button.getAttribute('aria-controls')).hidden = !selected;
+    });
+  }
+  settingsTabs.forEach((tab, index) => {
+    tab.addEventListener('click', () => selectSettingsTab(tab));
+    tab.addEventListener('keydown', event => {
+      const direction = ['ArrowDown','ArrowRight'].includes(event.key) ? 1 : ['ArrowUp','ArrowLeft'].includes(event.key) ? -1 : 0;
+      if (!direction && !['Home','End'].includes(event.key)) return;
+      event.preventDefault();
+      const next = settingsTabs[event.key === 'Home' ? 0 : event.key === 'End' ? settingsTabs.length-1 : (index+direction+settingsTabs.length)%settingsTabs.length];
+      selectSettingsTab(next); next.focus();
+    });
+  });
+  settingsDialog?.addEventListener('close', () => {
+    settingsDialog.querySelector('form').reset();
+    settingsDialog.querySelector('.form-error').hidden = true;
+    accountMenu?.querySelector('summary').focus();
+  });
+  // Generic dialogs: [data-dialog] opens by id, [data-close] closes, a matching #hash opens on load.
+  document.querySelectorAll('[data-dialog]').forEach(button => button.addEventListener('click', () => {
+    const target = document.getElementById(button.dataset.dialog);
+    if (!target) return;
+    history.replaceState(null, '', `#${target.id}`);
+    target.showModal();
+  }));
+  document.querySelectorAll('dialog').forEach(item => {
+    item.querySelectorAll('[data-close]').forEach(button => button.addEventListener('click', () => item.close()));
+    item.addEventListener('click', event => { if (event.target === item) item.close(); });
+    item.addEventListener('close', () => { if (location.hash === `#${item.id}`) history.replaceState(null, '', location.pathname + location.search); });
+  });
+  const hashed = location.hash && document.getElementById(decodeURIComponent(location.hash.slice(1)));
+  if (hashed instanceof HTMLDialogElement && hashed.id !== 'key-dialog') hashed.showModal();
+  const confirmDialog = document.querySelector('#confirm-dialog');
+  // Styled replacement for window.confirm. Resolves true only when the action button is used.
+  function confirmAction({ confirm: message, confirmTitle, confirmAction: action, danger }) {
+    const ok = document.querySelector('#confirm-ok');
+    document.querySelector('#confirm-title').textContent = confirmTitle || '确认操作';
+    document.querySelector('#confirm-message').textContent = message;
+    ok.textContent = action || '确定';
+    ok.classList.toggle('danger', danger !== undefined);
+    confirmDialog.returnValue = '';
+    confirmDialog.showModal();
+    return new Promise(resolve => confirmDialog.addEventListener('close', () => resolve(confirmDialog.returnValue === 'ok'), { once: true }));
+  }
+  document.querySelector('#confirm-ok').addEventListener('click', () => confirmDialog.close('ok'));
+  document.querySelectorAll('form[data-api]').forEach(form => form.addEventListener('submit', async event => {
+    event.preventDefault();
+    if (form.dataset.confirm && !(await confirmAction(form.dataset))) return;
+    const button = form.querySelector('button[type="submit"]');
+    if (button.disabled) return;
+    button.disabled = true;
+    const error = form.querySelector('.form-error');
+    if (error) error.hidden = true;
+    const data = Object.fromEntries(new FormData(form));
+    if ('return_urls' in data) data.return_urls = data.return_urls.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+    form.querySelectorAll('input[type="checkbox"]').forEach(input => { data[input.name] = input.checked; });
+    if (typeof data.enabled === 'string') data.enabled = data.enabled === 'true';
+    try {
+      const response = await fetch(form.dataset.api, { method: 'POST', credentials: 'same-origin', redirect: 'error', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf }, body: JSON.stringify(data) });
+      const result = await response.json();
+      if (!response.ok) {
+        if (response.status === 401 && result.error?.code === 'admin_unauthorized') { window.location.assign('/admin/login'); return; }
+        const fields = result.error?.fields?.map(f => `${f.path.join('.')}: ${f.message}`).join('\n');
+        throw new Error(fields || result.error?.message || '操作失败，请重试。');
+      }
+      form.querySelectorAll('input[type="password"]').forEach(input => { input.value = ''; });
+      if (form.hasAttribute('data-key-result')) {
+        document.querySelector('#issued-key').value = result.api_key;
+        form.closest('dialog')?.close();
+        dialog.dataset.return = '/admin/keys';
+        dialog.showModal();
+        return;
+      }
+      if (form.dataset.redirect) window.location.assign(form.dataset.redirect);
+      else if (form.hasAttribute('data-reload')) {
+        // Do not reopen the dialog this form was submitted from.
+        if (form.closest('dialog')) history.replaceState(null, '', location.pathname + location.search);
+        try { sessionStorage.setItem('connany_notice', result.revocation_status === 'failed' ? 'Connany 已断开连接，但平台撤销失败，可重试撤销。' : (form.dataset.success || '操作已完成')); } catch {}
+        window.location.reload();
+      }
+      else notify(form.dataset.success || '操作已完成');
+    } catch (failure) {
+      if (error) { error.textContent = failure.message || '网络异常，请重试。'; error.hidden = false; }
+      else notify(failure.message || '网络异常，请重试。');
+    } finally { button.disabled = false; }
+  }));
+
+  const testForm = document.querySelector('#connection-test');
+  if (testForm) {
+    const key = document.querySelector('#test-key');
+    const user = document.querySelector('#test-user');
+    const provider = document.querySelector('#test-provider');
+    const status = document.querySelector('#test-status');
+    const output = document.querySelector('#test-result');
+    const githubPanel = document.createElement('div');
+    output.before(githubPanel);
+    const open = document.querySelector('#test-open');
+    const check = document.querySelector('#test-check');
+    const read = document.querySelector('#test-read');
+    let session = null, connection = null, busy = false;
+    function reset() {
+      githubPanel.replaceChildren();
+      session = null; connection = null; check.disabled = true; read.disabled = true;
+      open.hidden = true; open.removeAttribute('href'); output.hidden = true; output.textContent = '';
+      status.textContent = '等待创建测试会话。';
+    }
+    [key,user,provider].forEach(input => input.addEventListener('input', reset));
+    window.addEventListener('pagehide', () => { key.value = ''; reset(); });
+    async function request(path, body) {
+      const response = await fetch('/v1' + path, {
+        method: body === undefined ? 'GET' : 'POST', credentials: 'omit', redirect: 'error',
+        headers: {Authorization: `Bearer ${key.value.trim()}`, 'Content-Type':'application/json'},
+        ...(body === undefined ? {} : {body:JSON.stringify(body)}), signal: AbortSignal.timeout(60000)
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(`${result.error?.code || response.status}: ${result.error?.message || '请求失败'}${result.request_id ? ' · ' + result.request_id : ''}`);
+      return result;
+    }
+    async function run(task) {
+      if (busy) return;
+      busy = true;
+      const controls = [...testForm.querySelectorAll('input,select,button'),check,read];
+      controls.forEach(control => { control.disabled = true; });
+      try { await task(); } catch (error) { status.textContent = error.message || '请求失败，请重试。'; }
+      finally {
+        busy = false;
+        testForm.querySelectorAll('input,select').forEach(control => { control.disabled = false; });
+        testForm.querySelector('button').disabled = !provider.selectedOptions[0] || provider.selectedOptions[0].disabled;
+        check.disabled = !session || ['error','expired'].includes(session.status);
+        read.disabled = !connection;
+      }
+    }
+    testForm.addEventListener('submit', event => {
+      event.preventDefault();
+      run(async () => {
+        reset(); status.textContent = '正在验证API Key并创建会话…';
+        session = await request('/connect-sessions', {external_user_id:user.value,provider:provider.value});
+        open.href = session.connect_url; open.hidden = false;
+        status.textContent = '授权链接已生成，15 分钟内有效。打开授权页面，完成后回来检查结果。';
+      });
+    });
+    check.addEventListener('click', () => run(async () => {
+      status.textContent = '正在查询授权结果…';
+      session = await request(`/connect-sessions/${encodeURIComponent(session.id)}?external_user_id=${encodeURIComponent(user.value)}`);
+      connection = session.status === 'connected' ? session.connection_id : null;
+      const labels = {pending:'等待打开授权页面。',authorizing:'等待完成平台授权；完成后再次检查。',processing:'正在处理授权，请稍后再次检查。',connected:'授权成功，可以试读数据。',expired:'链接已过期，请重新创建授权链接。',error:`授权失败：${session.error_code || '未知错误'}。检查配置后重新创建链接。`};
+      status.textContent = labels[session.status] || session.status;
+      if (session.status !== 'pending') { open.hidden = true; open.removeAttribute('href'); }
+      output.textContent = JSON.stringify(session,null,2); output.hidden = false;
+    }));
+    read.addEventListener('click', () => run(async () => {
+      status.textContent = '正在读取已授权的数据…'; output.hidden = true; output.textContent = '';
+      const execute = (action,input) => request('/actions/execute',{external_user_id:user.value,connection_id:connection,action,input});
+      let result;
+      if (provider.value === 'github') {
+        githubPanel.replaceChildren();
+        const installations = [];
+        let nextPage = 1, installationUrl;
+        while (nextPage) {
+          const response = await request(`/connections/${encodeURIComponent(connection)}/github/installations?${new URLSearchParams({external_user_id:user.value,page:String(nextPage),limit:'100'})}`);
+          installations.push(...response.data); installationUrl = response.installation_url; nextPage = response.next_page;
+        }
+        const addLink = (label,url,parent) => {
+          const parsed = new URL(url);
+          if (parsed.origin !== 'https://github.com') return;
+          const link = document.createElement('a'); link.textContent = label; link.href = url;
+          link.target = '_blank'; link.rel = 'noopener noreferrer'; link.className = 'button secondary'; parent.append(link);
+        };
+        addLink('添加组织 / 仓库 ↗',installationUrl,githubPanel);
+        for (const installation of installations) {
+          const row = document.createElement('div'); row.className = 'test-actions';
+          const label = document.createElement('strong'); label.textContent = installation.account || String(installation.id); row.append(label);
+          if (installation.management_url) addLink('管理仓库权限 ↗',installation.management_url,row);
+          const button = document.createElement('button'); button.className = 'button secondary'; button.textContent = '试读此组织仓库';
+          button.addEventListener('click', () => run(async () => {
+            output.hidden = true;
+            const repositories = await execute('github.repositories.list',{installation_id:installation.id,limit:10});
+            output.textContent = JSON.stringify(repositories,null,2); output.hidden = false;
+            status.textContent = `${installation.account} 仓库读取成功。`;
+          }));
+          row.append(button); githubPanel.append(row);
+        }
+        const tools = await request('/actions/discover',{provider:'github',external_user_id:user.value,connection_id:connection,limit:5});
+        result = {installations,tools};
+        status.textContent = installations.length ? '已获取组织列表，请选择组织试读。管理入口可能需要组织管理员权限。' : '账号已连接，尚未添加仓库。可以点击添加组织 / 仓库，完成后再次试读刷新列表。';
+      } else {
+        result = await request('/actions/discover',{provider:provider.value,external_user_id:user.value,connection_id:connection,limit:5});
+        status.textContent = '读取成功。空列表表示当前授权范围内没有可见数据。';
+      }
+      output.textContent = JSON.stringify(result,null,2); output.hidden = false;
+    }));
+  }
+})();

@@ -1,0 +1,17 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: connany
+      POSTGRES_PASSWORD: connany
+      POSTGRES_DB: connany
+    ports:
+      - "127.0.0.1:54329:5432"
+    volumes:
+      - connany-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U connany"]
+      interval: 5s
+      retries: 10
+volumes:
+  connany-db:

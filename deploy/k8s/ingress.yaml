@@ -1,0 +1,28 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: connany
+  namespace: connany
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/proxy-read-timeout: '120'
+    nginx.ingress.kubernetes.io/proxy-send-timeout: '120'
+    # OAuth URLs contain transient credentials; do not log request URLs.
+    nginx.ingress.kubernetes.io/enable-access-log: 'false'
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - connect.example.com
+      secretName: connany-tls
+  rules:
+    - host: connect.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: connany
+                port:
+                  number: 3000

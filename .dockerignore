@@ -1,0 +1,23 @@
+# Only ship files required by the Dockerfile.
+**
+!package.json
+!package-lock.json
+!tsconfig.json
+!tsconfig.build.json
+!src/
+!src/**
+!scripts/
+!scripts/**
+!sdk/
+!sdk/**
+!examples/
+!examples/**
+!migrations/
+!migrations/**
+!public/
+!public/**
+!docs/
+!docs/**
+!LICENSE
+!THIRD_PARTY_NOTICES.md
+!Dockerfile

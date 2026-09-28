@@ -1,0 +1,145 @@
+import {test,before,after} from 'node:test';
+import assert from 'node:assert/strict';
+import pg from 'pg';
+import {randomBytes} from 'node:crypto';
+import {createAdmin} from '../../src/admin/auth.js';
+import {migrate} from '../../src/db.js';
+import {Vault} from '../../src/crypto.js';
+import {Service} from '../../src/service.js';
+import {Providers} from '../../src/providers/index.js';
+import {createApp} from '../../src/app.js';
+import {config} from '../support.js';
+if(!process.env.TEST_DATABASE_URL)throw new Error('TEST_DATABASE_URL is required');
+const schema=`admin_${randomBytes(8).toString('hex')}`;
+const owner=new pg.Pool({connectionString:process.env.TEST_DATABASE_URL});
+const pool=new pg.Pool({connectionString:process.env.TEST_DATABASE_URL,options:`-c search_path=${schema}`});
+const emptyConfig={...config,providers:{notion:{clientId:'',clientSecret:''},linear:{clientId:'',clientSecret:''},github:{clientId:'',clientSecret:''}}};
+const calls:{url:string;auth:string;body:string}[]=[];
+const fetcher:typeof fetch=async(url,init)=>{
+  const u=String(url);calls.push({url:u,auth:new Headers(init?.headers).get('Authorization')||'',body:String(init?.body||'')});
+  if(u.endsWith('/login/oauth/access_token'))return Response.json({access_token:'upstream-token',refresh_token:'upstream-refresh',expires_in:3600,workspace_id:'w',workspace_name:'Work',bot_id:'bot',owner:{user:{id:'alice',name:'Alice'}}});
+  if(u.endsWith('/oauth/revoke'))return Response.json({});
+  if(u.endsWith('/user')) return Response.json({id:42,login:'alice'});
+  if(u.includes('/user/installations')) return Response.json({installations:[],total_count:0});
+  return Response.json({data:{viewer:{id:'alice',name:'Alice'},organization:{id:'w',name:'Work'},teams:{nodes:[]}}});
+};
+const vault=new Vault(config.encryptionKey);
+const service=new Service(pool,new Providers(emptyConfig,fetcher),vault);
+const app=createApp(service);
+let cookie='';let csrf='';
+const admin=(path:string,method='GET',body?:unknown,extra:Record<string,string>={})=>app.request(`http://localhost:3000/admin${path}`,{method,headers:{Cookie:cookie,Origin:config.publicBaseUrl,'Content-Type':'application/json','X-CSRF-Token':csrf,...extra},...(body===undefined?{}:{body:JSON.stringify(body)})});
+const api=(key:string,path:string,method='GET',body?:unknown)=>app.request(`http://localhost:3000/v1${path}`,{method,headers:{Authorization:`Bearer ${key}`,'Content-Type':'application/json'},...(body===undefined?{}:{body:JSON.stringify(body)})});
+async function save(client='client-a',secret='private-secret-a',enabled=true){return admin('/api/providers/github','POST',{client_id:client,client_secret:secret,github_app_slug:'test-app',enabled});}
+async function project(name:string){const response=await admin('/api/projects','POST',{name,return_urls:['http://localhost:3001/done']});assert.equal(response.status,201);return response.json() as Promise<any>;}
+async function connect(key:string,user='same-user'){
+  const response=await api(key,'/connect-sessions','POST',{provider:'github',external_user_id:user});assert.equal(response.status,201);const session=await response.json() as any;
+  const start=await app.request(`${session.connect_url}/start`,{method:'POST',headers:{Origin:config.publicBaseUrl}});assert.equal(start.status,200);
+  const state=new URL(start.headers.get('refresh')!.slice(6)).searchParams.get('state');
+  const result=await app.request(`http://localhost:3000/oauth/github/callback?state=${state}&code=test`,{headers:{Cookie:start.headers.get('set-cookie')!.split(';')[0]}});assert.equal(result.status,200);
+  const completed=await(await api(key,`/connect-sessions/${session.id}?external_user_id=${user}`)).json() as any;
+  return completed.connection_id as string;
+}
+before(async()=>{await owner.query(`CREATE SCHEMA ${schema}`);await migrate(pool);await migrate(pool);await createAdmin(pool,'admin@example.com','test-admin-password-123');});
+after(async()=>{await pool.end();await owner.query(`DROP SCHEMA ${schema} CASCADE`);await owner.end();});
+test('admin access requires login, exact Origin and session-bound CSRF',async()=>{
+  assert.equal((await admin('')).status,302);assert.equal((await admin('/api/projects')).status,401);
+  assert.equal((await admin('/api/login','POST',{email:'admin@example.com',password:'wrong'},{Origin:'https://evil.example'})).status,403);
+  assert.equal((await admin('/api/login','POST',{email:'admin@example.com',password:'wrong'})).status,401);
+  const login=await admin('/api/login','POST',{email:'ADMIN@example.com',password:'test-admin-password-123'});assert.equal(login.status,200);
+  const set=login.headers.get('set-cookie')!;assert.match(set,/HttpOnly/);assert.match(set,/SameSite=Strict/);cookie=set.split(';')[0];
+  const html=await(await admin('')).text();assert(html.includes('连接，从这里开始'));csrf=html.match(/name="csrf-token" content="([^"]+)"/)![1];
+  assert.equal((await admin('/api/projects','POST',{name:'Bad',return_urls:[]},{'X-CSRF-Token':'bad'})).status,403);
+  assert.equal((await admin('/api/projects','POST',{name:'Bad',return_urls:[]},{Origin:'https://evil.example'})).status,403);
+  assert(!html.includes('password_hash'));assert(!html.includes('test-admin-password-123'));
+});
+test('database provider configuration becomes available without restart and never exposes secrets',async()=>{
+  assert.equal((await save()).status,200);
+  const view=await(await admin('/api/providers')).text();assert(!view.includes('private-secret-a'));assert(!view.includes('ciphertext'));
+  const data=JSON.parse(view);assert.equal(data.data.filter((p:any)=>p.enabled).length,1);
+  const stored=(await pool.query("SELECT * FROM provider_apps WHERE provider='github'")).rows[0];assert(!stored.secret_ciphertext.includes('private-secret-a'));
+  assert.equal((await save('client-a','')).status,200);
+  const current=await service.providerStore.active('github');assert.equal(current.providers.config.providers.github.clientSecret,'private-secret-a');
+  assert.equal((await save('brand-new-client','')).status,400);
+  const html=await(await admin('/connectors')).text();assert(!html.includes('private-secret-a'));assert(html.includes('/oauth/github/callback'));
+});
+let a:any,b:any,connectionA:string;
+test('multiple agents share one app configuration while user connections remain isolated',async()=>{
+  a=await project('Agent A');b=await project('Agent B');assert.notEqual(a.api_key,b.api_key);
+  connectionA=await connect(a.api_key);const connectionB=await connect(b.api_key);
+  assert.notEqual(connectionA,connectionB);
+  const {rows}=await pool.query('SELECT DISTINCT provider_app_id FROM connections');assert.equal(rows.length,1);
+  assert.equal((await api(b.api_key,`/connections/${connectionA}?external_user_id=same-user`)).status,404);
+  const execute={external_user_id:'same-user',connection_id:connectionA,action:'github.installations.list',input:{}};
+  assert.equal((await api(b.api_key,'/actions/execute','POST',execute)).status,404);
+  assert.equal((await api(a.api_key,'/actions/execute','POST',execute)).status,200);
+  const projectsText=await(await admin('/api/projects')).text();assert(!projectsText.includes(a.api_key));assert(!projectsText.includes('api_key_hash'));
+  assert.equal((await app.request('http://localhost:3000/admin/api/providers',{headers:{Authorization:`Bearer ${a.api_key}`}})).status,401);
+});
+test('secret rotation affects existing connections; changing Client ID pins old sessions and tokens',async()=>{
+  assert.equal((await save('client-a','rotated-secret-a')).status,200);
+  const pending=await(await api(a.api_key,'/connect-sessions','POST',{external_user_id:'pending-user',provider:'github'})).json() as any;
+  assert.equal((await save('client-b','secret-b')).status,200);
+  const start=await app.request(`${pending.connect_url}/start`,{method:'POST',headers:{Origin:config.publicBaseUrl}});
+  assert.equal(new URL(start.headers.get('refresh')!.slice(6)).searchParams.get('client_id'),'client-a');
+  const c=await service.getConnection(a.project.id,'same-user',connectionA);
+  const credential=vault.open<any>(c.credential_ciphertext!,service.context(c));credential.expiresAt=new Date(0).toISOString();
+  await pool.query('UPDATE connections SET credential_ciphertext=$1 WHERE id=$2',[vault.seal(credential,service.context(c)),c.id]);
+  assert.equal((await api(a.api_key,'/actions/execute','POST',{external_user_id:'same-user',connection_id:c.id,action:'github.installations.list',input:{}})).status,200);
+  const refresh=calls.findLast(call=>call.url.endsWith('/login/oauth/access_token')&&call.body.includes('refresh_token'))!;
+  assert.equal(new URLSearchParams(refresh.body).get('client_id'),'client-a');assert.equal(new URLSearchParams(refresh.body).get('client_secret'),'rotated-secret-a');
+  const newConnection=await connect(a.api_key,'new-user');const fresh=await service.getConnection(a.project.id,'new-user',newConnection);
+  assert.notEqual(fresh.provider_app_id,c.provider_app_id);
+  const otherInstance=new Service(pool,new Providers({...config,providers:{...config.providers,github:{clientId:'client-a',clientSecret:'stale-env-secret'}}},fetcher),vault);
+  await otherInstance.initialize();assert.equal((await otherInstance.providerStore.active('github')).providers.config.providers.github.clientId,'client-b');
+  assert.equal((await otherInstance.providerStore.resolve('github',c.provider_app_id)).config.providers.github.clientSecret,'rotated-secret-a');
+});
+test('pausing provider blocks new sessions but permits existing connections',async()=>{
+  assert.equal((await save('client-b','',false)).status,200);
+  assert.equal((await api(a.api_key,'/connect-sessions','POST',{external_user_id:'u',provider:'github'})).status,503);
+  assert.equal((await api(a.api_key,'/actions/execute','POST',{external_user_id:'same-user',connection_id:connectionA,action:'github.installations.list',input:{}})).status,200);
+  assert.equal((await save('client-b','',true)).status,200);
+});
+test('rotating and disabling one project immediately invalidates its key and leaves the other usable',async()=>{
+  const rotated=await(await admin(`/api/projects/${a.project.id}/rotate-key`,'POST',{})).json() as any;
+  assert.equal((await api(a.api_key,'/providers')).status,401);a.api_key=rotated.api_key;
+  assert.equal((await api(a.api_key,'/providers')).status,200);
+  const pending=await(await api(a.api_key,'/connect-sessions','POST',{external_user_id:'u',provider:'github'})).json() as any;
+  assert.equal((await admin(`/api/projects/${a.project.id}/status`,'POST',{enabled:false})).status,200);
+  assert.equal((await api(a.api_key,'/providers')).status,401);assert.equal((await api(b.api_key,'/providers')).status,200);
+  assert.equal((await app.request(pending.connect_url)).status,410);
+  assert.equal((await admin(`/api/projects/${a.project.id}/status`,'POST',{enabled:true})).status,200);
+  assert.equal((await app.request(pending.connect_url)).status,410);
+  assert.equal((await api(a.api_key,'/providers')).status,200);
+});
+test('admin can disconnect users, see sanitized activity and edit return URL allowlists',async()=>{
+  assert.equal((await admin(`/api/projects/${a.project.id}`,'POST',{name:'Agent A renamed',return_urls:['https://a.example/return']})).status,200);
+  assert.equal((await admin(`/api/projects/${a.project.id}`,'POST',{name:'Bad',return_urls:['http://evil.example']})).status,400);
+  // Admin UI edits name only; stored legacy return URLs are kept, not wiped.
+  assert.equal((await admin(`/api/projects/${a.project.id}`,'POST',{name:'Agent A name only'})).status,200);
+  assert.deepEqual((await pool.query('SELECT return_urls FROM projects WHERE id=$1',[a.project.id])).rows[0].return_urls,['https://a.example/return']);
+  assert.equal((await admin(`/api/connections/${connectionA}/disconnect`,'POST',{})).status,200);
+  assert.equal((await service.getConnection(a.project.id,'same-user',connectionA)).status,'revoked');
+  const list=await(await admin('/api/connections')).text();assert(!list.includes('credential_ciphertext'));assert(!list.includes('upstream-token'));
+  const activity=await(await admin('/activity')).text();assert(activity.includes('project.key_rotated'));assert(!activity.includes('rotated-secret-a'));
+});
+test('deleting an API key revokes upstream grants and removes only its data',async()=>{
+  assert.equal((await save()).status,200);
+  const doomed=await project('Doomed'),kept=await project('Kept');
+  const connections=[await connect(doomed.api_key,'u1'),await connect(doomed.api_key,'u2')];const keptConnection=await connect(kept.api_key,'u1');
+  const revokes=()=>calls.filter(c=>c.url.includes('/applications/')&&c.url.endsWith('/token')).length;const before=revokes();
+  const response=await admin(`/api/projects/${doomed.project.id}/delete`,'POST',{});assert.equal(response.status,200);assert.equal(((await response.json()) as any).revoked,2);
+  assert.equal(revokes()-before,2);
+  assert.equal((await api(doomed.api_key,'/providers')).status,401);
+  for(const table of ['projects','connections','connect_sessions','events'])assert.equal((await pool.query(`SELECT 1 FROM ${table} WHERE ${table==='projects'?'id':'project_id'}=$1`,[doomed.project.id])).rowCount,0,table);
+  assert.equal((await pool.query('SELECT 1 FROM connections WHERE id=ANY($1)',[connections])).rowCount,0);
+  assert.equal((await service.getConnection(kept.project.id,'u1',keptConnection)).status,'connected');
+  assert.equal((await admin(`/api/projects/${doomed.project.id}/delete`,'POST',{})).status,404);
+  assert((await(await admin('/activity')).text()).includes('project.deleted'));
+});
+test('logout and admin password reset revoke sessions, and login attempts are limited',async()=>{
+  assert.equal((await admin('/api/logout','POST',{})).status,200);assert.equal((await admin('/api/projects')).status,401);
+  const login=await admin('/api/login','POST',{email:'admin@example.com',password:'test-admin-password-123'});cookie=login.headers.get('set-cookie')!.split(';')[0];
+  await createAdmin(pool,'admin@example.com','reset-admin-password-123');assert.equal((await admin('/api/projects')).status,401);
+  for(let i=0;i<10;i++)await admin('/api/login','POST',{email:'admin@example.com',password:'wrong'});
+  assert.equal((await admin('/api/login','POST',{email:'admin@example.com',password:'wrong'})).status,429);
+});

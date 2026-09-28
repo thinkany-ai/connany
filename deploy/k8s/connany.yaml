@@ -1,0 +1,111 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: connany
+  namespace: connany
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: connany
+  template:
+    metadata:
+      labels:
+        app: connany
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      # Uncomment if your image registry is private; create this secret first.
+      # imagePullSecrets:
+      #   - name: registry-credentials
+      initContainers:
+        - name: migrate
+          image: ghcr.io/thinkany-ai/connany:main
+          imagePullPolicy: Always
+          command: [node, dist/scripts/migrate.js]
+          envFrom:
+            - secretRef:
+                name: connany-runtime
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: '1'
+              memory: 512Mi
+      containers:
+        - name: connany
+          image: ghcr.io/thinkany-ai/connany:main
+          imagePullPolicy: Always
+          env:
+            - name: NODE_ENV
+              value: production
+            - name: PORT
+              value: '3000'
+            - name: PUBLIC_BASE_URL
+              value: https://connect.example.com
+          envFrom:
+            - secretRef:
+                name: connany-runtime
+          ports:
+            - name: http
+              containerPort: 3000
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+            failureThreshold: 30
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 10
+          # Database outages should remove readiness, not restart every replica.
+          livenessProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: '1'
+              memory: 512Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: connany
+  namespace: connany
+spec:
+  selector:
+    app: connany
+  ports:
+    - name: http
+      port: 3000
+      targetPort: http
+  type: ClusterIP

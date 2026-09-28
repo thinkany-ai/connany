@@ -1,0 +1,25 @@
+node_modules/
+dist/
+coverage/
+artifacts/
+.local/
+.env
+.env.*
+!.env.example
+*.log
+*.tsbuildinfo
+.DS_Store
+.idea/
+.vscode/
+# Runtime credentials, local deployment overrides and database backups
+*.pem
+*.key
+*.p12
+*.dump
+*.sql.gz
+backups/
+deploy/**/secrets/
+deploy/**/secret*.yaml
+deploy/**/secret*.yml
+deploy/**/*.local.yaml
+deploy/**/*.local.yml
