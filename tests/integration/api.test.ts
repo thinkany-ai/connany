@@ -107,7 +107,14 @@ test('browser binding, connector binding, denial, origin and return URL checks',
   assert.equal((await app.request(flow.callback)).status,400);
   assert.equal((await app.request(flow.callback.replace('/notion/', '/github/'), { headers: { Cookie: flow.cookie } })).status,400);
   const denied = flow.callback.replace('&code=code','&error=access_denied');
-  assert.equal((await app.request(denied,{headers:{Cookie:flow.cookie}})).status,400);
+  // With a return_url, a denied authorization returns to the agent with the outcome.
+  const deniedResponse = await app.request(denied,{headers:{Cookie:flow.cookie}});
+  assert.equal(deniedResponse.status,302);
+  const deniedLocation = new URL(deniedResponse.headers.get('location')!);
+  assert.equal(deniedLocation.origin,'http://localhost:3001');
+  assert.equal(deniedLocation.searchParams.get('connany_session_id'),flow.session.id);
+  assert.equal(deniedLocation.searchParams.get('connany_status'),'error');
+  assert.equal(deniedLocation.searchParams.get('connany_error'),'access_denied');
   const status = await (await api(`/v1/connectors/notion/sessions/${flow.session.id}?external_user_id=browser-user`)).json() as any;
   assert.equal(status.error_code,'access_denied');
   const created = await (await api('/v1/connectors/notion/sessions','POST',{external_user_id:'u'})).json() as any;
