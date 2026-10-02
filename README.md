@@ -105,6 +105,7 @@ See the [Kubernetes deployment guide (Chinese)](deploy/README.md#kubernetes) for
 | `PUBLIC_BASE_URL` | Public HTTPS origin without a path; HTTP is allowed only for localhost / 127.0.0.1 |
 | `TOKEN_ENCRYPTION_KEY` | 32 random bytes encoded as base64; back it up and keep it stable across restarts |
 | `PORT` | Listening port; defaults to 3000 |
+| `MIGRATE_ON_START` | Pending database migrations run automatically at startup; set to `false` to run them yourself with `node dist/scripts/migrate.js` |
 
 Configure connector credentials in the console. The GitHub variables in `.env.example` support a one-time import for compatibility with older configurations.
 

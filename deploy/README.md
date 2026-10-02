@@ -2,6 +2,8 @@
 
 所有命令默认在仓库根目录执行。镜像使用根目录 `Dockerfile`，包含编译后的服务、数据库迁移和管理员命令，不需要在运行容器中安装开发依赖。
 
+**服务启动时会自动执行未完成的数据库迁移**（事务 + advisory lock，多副本同时启动也安全），所以在 Dokploy、Railway 等平台只需配置环境变量，无需额外的迁移步骤。下文 Compose 的 `migrate` 服务和 Kubernetes 的 initContainer 保留为显式的迁移步骤，能让迁移失败时更早暴露；与自动迁移同时存在没有问题。如需由外部流程统一执行迁移，设置 `MIGRATE_ON_START=false` 关闭自动迁移。
+
 | 方式 | 数据库 | 配置 |
 | --- | --- | --- |
 | [Docker Compose](#docker-compose) | 自动创建 PostgreSQL 16 + 持久卷 | `deploy/docker/.env` |

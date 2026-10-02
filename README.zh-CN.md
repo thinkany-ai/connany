@@ -106,6 +106,7 @@ docker compose --env-file deploy/docker/.env -f deploy/docker/compose.yaml exec 
 | `PUBLIC_BASE_URL` | 公开 HTTPS origin，无路径；仅 localhost / 127.0.0.1 允许 HTTP |
 | `TOKEN_ENCRYPTION_KEY` | 32 字节随机值的 base64 编码；必须备份并跨重启保持稳定 |
 | `PORT` | 监听端口，默认 3000 |
+| `MIGRATE_ON_START` | 启动时自动执行未完成的数据库迁移；设为 `false` 时需自行运行 `node dist/scripts/migrate.js` |
 
 连接器凭证在后台配置；`.env.example` 中 GitHub 相关变量仅用于兼容旧版的一次性导入。
 
