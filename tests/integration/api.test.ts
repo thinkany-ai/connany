@@ -241,7 +241,7 @@ test('administrator tool sync fills the catalog, revokes the token and creates n
   await pool.query("INSERT INTO admin_users(id,email,password_hash) VALUES('admin_sync','sync@example.com','x') ON CONFLICT DO NOTHING");
   const connections = (await pool.query('SELECT count(*)::int AS n FROM connections')).rows[0].n;
   const revocations = tokenRevocations;
-  const { session, browser, url } = await service.beginToolSync('linear', 'admin_sync');
+  const { session, browser, url } = await service.beginToolSync('linear', 'admin_sync', 'ws_default');
   const state = new URL(url).searchParams.get('state');
   const page = await app.request(`http://localhost:3000/oauth/linear/callback?state=${state}&code=code`, { headers: { Cookie: `connany_${session.id}=${browser}` } });
   assert.equal(page.status, 200); assert((await page.text()).includes('已同步 1 个工具'));

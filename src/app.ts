@@ -7,7 +7,7 @@ import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
 import { z } from 'zod';
 import { connectorNames } from './config.js';
 import { AppError } from './errors.js';
-import { home, resultPage, errorPage, redirectPage, toolSyncPage } from './pages.js';
+import { resultPage, errorPage, redirectPage, toolSyncPage } from './pages.js';
 import { restToolCatalog, restTools, toolNamePattern, type ToolName } from './connectors/index.js';
 import { publicConnection, publicSession, Service, type Project } from './service.js';
 import type { ToolDefinition } from './connector-store.js';
@@ -67,7 +67,7 @@ export function createApp(service: Service) {
     return c.body(connectorCatalog[name].icon);
   });
   app.get('/favicon.svg', c => { c.header('Content-Type', 'image/svg+xml'); return c.body(favicon); });
-  app.get('/', async c => c.html(home(await service.connectorStore.list())));
+  app.get('/', c => c.redirect('/admin', 302));
   app.get('/health', async c => { await service.pool.query('SELECT 1'); return c.json({ status: 'ok', version: '0.1.0' }); });
   app.use('/v1/*', async (c, next) => {
     const auth = c.req.header('Authorization');
@@ -76,7 +76,7 @@ export function createApp(service: Service) {
   });
   app.get('/v1/connectors', async c => {
     const base = service.runtime.config.publicBaseUrl;
-    return c.json({ data: (await service.connectorStore.list()).filter(item => item.enabled).map(item => ({ name: item.name, title: connectorCatalog[item.name].label, avatar_url: `${base}/connectors/${item.name}/avatar.svg`, tools_synced_at: item.tools_synced_at })) });
+    return c.json({ data: (await service.connectorStore.in(c.get('project').workspace_id).list()).filter(item => item.enabled).map(item => ({ name: item.name, title: connectorCatalog[item.name].label, description: connectorCatalog[item.name].description, avatar_url: `${base}/connectors/${item.name}/avatar.svg`, tools_synced_at: item.tools_synced_at })) });
   });
   app.post('/v1/connectors/:name/sessions', async c => {
     const connector = z.enum(connectorNames).safeParse(c.req.param('name'));
@@ -132,7 +132,7 @@ export function createApp(service: Service) {
   // Catalog view: what each enabled connector offers, independent of users.
   app.get('/v1/tools', async c => {
     const input = z.object({connector:z.enum(connectorNames).optional(),...toolQuery}).strict().parse(c.req.query());
-    return c.json(pageTools((await service.connectorStore.tools()).filter(t=>!input.connector || t.connector===input.connector), input));
+    return c.json(pageTools((await service.connectorStore.in(c.get('project').workspace_id).tools()).filter(t=>!input.connector || t.connector===input.connector), input));
   });
   // Runtime view: tools this user can use now through an authorized connection.
   app.get('/v1/connections/:id/tools', async c => {
@@ -140,7 +140,7 @@ export function createApp(service: Service) {
     const connection = await service.getConnection(c.get('project').id, input.external_user_id, c.req.param('id'));
     if (connection.status !== 'connected') throw new AppError(connection.status === 'revoked' ? 'connection_revoked' : 'reauth_required', 'Reconnect this account before using its tools.', 409);
     // Without a cached catalog, read it with this connection's credential (which also caches it).
-    const tools = await service.connectorStore.catalog(connection.connector)
+    const tools = await service.connectorStore.in(c.get('project').workspace_id).catalog(connection.connector)
       ?? await service.execute(c.get('project').id, input.external_user_id, connection.id, `${connection.connector}.__discover`, {}) as ToolDefinition[];
     return c.json(pageTools(tools, input));
   });

@@ -13,7 +13,7 @@ async function passwordInput() {
   const silent=new Writable({write(_chunk,_encoding,callback){callback();}});
   const rl=createInterface({input:process.stdin,output:silent,terminal:true});
   const prompt=(text:string)=>new Promise<string>(resolve=>{process.stdout.write(text);rl.question('',answer=>{process.stdout.write('\n');resolve(answer);});});
-  try { const first=await prompt('Password (at least 12 characters, hidden): ');const second=await prompt('Confirm password: ');if(first!==second)throw new Error('Passwords do not match.');return first; }
+  try { const first=await prompt('Password (at least 8 characters, hidden): ');const second=await prompt('Confirm password: ');if(first!==second)throw new Error('Passwords do not match.');return first; }
   finally {rl.close();}
 }
 const password=await passwordInput();

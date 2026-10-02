@@ -10,7 +10,7 @@ Connany 是面向 Agent 产品的开源多租户连接器服务。统一管理�
 
 ## 功能
 
-- 管理后台：连接器配置一次并同步工具目录，为每个 agent 创建项目，管理项目的 API Key（支持不停机轮换），查看用户连接及操作记录，阅读 API 文档和 Agent 接入指南。
+- 管理后台：连接器配置一次并同步工具目录，为每个 agent 创建项目，管理项目的 API Key（支持不停机轮换），查看用户连接及操作记录，阅读 API 文档和 Agent 接入指南；系统管理员还可以管理后台用户（系统管理员 / 普通用户）。
 - 用户授权：托管 OAuth 页面、一次性 state、浏览器绑定、GitHub/Linear PKCE。
 - 项目隔离：每个 API Key 属于一个项目，用户数据按 `project_id + external_user_id` 归属。
 - 连接管理：多账号和工作区、查询、主动检查、重连、断开及上游撤销重试。
@@ -33,7 +33,7 @@ npm run admin:create -- admin@example.com
 npm run dev   # 或：make dev
 ```
 
-管理员密码交互输入，至少 12 位。`npm run setup` 生成 `.env` 和随机加密密钥，不覆盖已有文件。根目录 `compose.yaml` 仅启动本地 PostgreSQL，默认密码仅供开发。
+管理员密码交互输入，至少 8 位。`npm run setup` 生成 `.env` 和随机加密密钥，不覆盖已有文件。根目录 `compose.yaml` 仅启动本地 PostgreSQL，默认密码仅供开发。
 
 - 管理后台：<http://localhost:3000/admin>，侧边栏「文档」包含 API 文档和 Agent 接入指南。
 - 公开 API 文档：<http://localhost:3000/docs>，支持中英文、代码复制、Markdown 和 SDK 下载。
@@ -139,7 +139,7 @@ tests/        单元、集成及浏览器测试
 ## 当前边界
 
 - 连接器配置由多个项目共享；平台侧授权可能复用，项目内隔离不等于独立的上游 OAuth grant。
-- 当前使用 REST/SDK 和事件轮询，尚无对 Agent 的 MCP 服务端、推送 webhook 或按项目/工作空间自带 OAuth 应用；数据库已预留 `workspaces` 表，目前只有一个默认工作空间。
+- 当前使用 REST/SDK 和事件轮询，尚无对 Agent 的 MCP 服务端或推送 webhook。每个后台用户拥有独立的工作空间（连接器、项目、用户连接各自隔离），同一工作空间内的项目共用连接器配置。
 - 无自动凭证主密钥轮换、审计数据清理或上游撤销重试 worker。
 - 公开部署需自行配置 HTTPS、数据库备份和入口限流。
 

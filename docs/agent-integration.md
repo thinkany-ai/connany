@@ -61,10 +61,10 @@ const connany = new Connany({
 
 ```ts
 const { data: connectors } = await connany.connectors();
-// [{ name: 'notion', title: 'Notion', avatar_url: 'https://…/connectors/notion/avatar.svg', tools_synced_at: … }, …]
+// [{ name: 'notion', title: 'Notion', description: '页面、数据库与工作区搜索', avatar_url: 'https://…/connectors/notion/avatar.svg', tools_synced_at: … }, …]
 ```
 
-对应 `GET /v1/connectors`，只返回管理员已启用的连接器。用 `title` 和 `avatar_url` 渲染「连接账号」入口（`avatar_url` 可直接放进 `<img>`）。如果想在用户连接之前介绍某个连接器能做什么，可以读工具目录 `connany.toolCatalog({ connector: 'notion' })`（`GET /v1/tools?connector=notion`）。
+对应 `GET /v1/connectors`，只返回管理员已启用的连接器。用 `title`、`description` 和 `avatar_url` 渲染「连接账号」入口（`avatar_url` 可直接放进 `<img>`）。如果想在用户连接之前介绍某个连接器能做什么，可以读工具目录 `connany.toolCatalog({ connector: 'notion' })`（`GET /v1/tools?connector=notion`）。
 
 ### 2.2 创建授权会话，把链接交给用户
 

@@ -2,7 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import vm from 'node:vm';
-import {layout,connectorList,projectList,projectDetail,connectionsPage,testPage,loginPage,overview} from '../src/admin/pages.js';
+import {layout,connectorList,projectList,projectDetail,connectionsPage,testPage,loginPage,overview,usersPage} from '../src/admin/pages.js';
 import {docsPage,apiMarkdown} from '../src/docs.js';
 
 async function languageRuntime(saved?:string) {
@@ -25,7 +25,7 @@ test('primary screens have English translations and user supplied key names opt 
  const keys=[{id:'key_a',name:'生产',key_prefix:'cn_live_demo',created_at:new Date(),last_used_at:null,revoked_at:null},{id:'key_b',name:'',key_prefix:'cn_live_old',created_at:new Date(),last_used_at:new Date(),revoked_at:new Date()}];
  const projectHtml=projectList([project],null)+projectDetail(project,keys);
  assert(projectHtml.includes('translate="no">设置</a>'));assert(projectHtml.includes('<strong translate="no">生产</strong>'));
- const html=layout('总览','overview','admin@example.com','',overview(runtime,{projects:1,active_projects:1,connections:3}))+connectorList(runtime)+projectList([],null)+projectHtml.replaceAll('translate="no">设置','translate="no">x').replaceAll('translate="no">生产','translate="no">x')+loginPage()+connectionsPage([],'','',null)+testPage(runtime,'notion');
+ const html=layout('总览','overview','admin@example.com','',overview(runtime,{projects:1,active_projects:1,connections:3}))+connectorList(runtime)+projectList([],null)+projectHtml.replaceAll('translate="no">设置','translate="no">x').replaceAll('translate="no">生产','translate="no">x')+loginPage()+connectionsPage([],[{id:'proj_a',name:'x'}],'','',null)+usersPage([{id:'admin_a',email:'a@example.com',role:'admin',created_at:new Date(),last_login_at:null},{id:'admin_b',email:'b@example.com',role:'member',created_at:new Date(),last_login_at:new Date()}] as any,{id:'admin_a',email:'a@example.com',role:'admin',workspace_id:'ws_a'})+layout('x','users','a@example.com','','','admin')+testPage(runtime,'notion');
  const text=html.replace(/<(script|style|textarea|code)\b[^>]*>[\s\S]*?<\/\1>/g,'').replace(/<[^>]+>/g,'\n');
  const missing=[...new Set(text.split('\n').map(v=>v.trim()).filter(v=>/[\u4e00-\u9fff]/.test(t(v,'en'))&&v!=='简体中文'))];
  assert.deepEqual(missing,[]);

@@ -9,7 +9,7 @@ It supports **Notion MCP, GitHub App + MCP, and Linear MCP**. MCP is used to con
 
 ## Features
 
-- **Admin console:** configure connectors once and sync their tool catalogs, create a project for each agent, manage each project's API keys (zero-downtime rotation), inspect user connections and activity, and read the API docs and agent integration guide.
+- **Admin console:** configure connectors once and sync their tool catalogs, create a project for each agent, manage each project's API keys (zero-downtime rotation), inspect user connections and activity, read the API docs and agent integration guide, and (as an administrator) manage console users as administrators or members.
 - **User authorization:** hosted OAuth pages, single-use state, browser binding, and PKCE for GitHub and Linear.
 - **Project isolation:** every API key belongs to a project; user data is scoped to `project_id + external_user_id`.
 - **Connection management:** multiple accounts and workspaces, listing, active checks, reconnection, disconnection, and upstream revocation retries.
@@ -32,7 +32,7 @@ npm run admin:create -- admin@example.com
 npm run dev   # or: make dev
 ```
 
-Enter an administrator password of at least 12 characters when prompted. `npm run setup` creates `.env` with a random encryption key without overwriting an existing file. The root `compose.yaml` starts only PostgreSQL; its default password is for local development.
+Enter an administrator password of at least 8 characters when prompted. `npm run setup` creates `.env` with a random encryption key without overwriting an existing file. The root `compose.yaml` starts only PostgreSQL; its default password is for local development.
 
 - Admin console: <http://localhost:3000/admin>; **Docs** in the sidebar holds the API docs and the agent integration guide.
 - Public API docs: <http://localhost:3000/docs>, with English and Chinese content, copyable examples, and Markdown/SDK downloads.
@@ -138,7 +138,7 @@ tests/        Unit, integration, and browser tests
 ## Current limitations
 
 - Connector configuration is shared across projects, and upstream authorization may be reused. Project isolation does not imply separate upstream OAuth grants.
-- The current interfaces are REST/SDK and event polling. There is no agent-facing MCP server, push webhook delivery, or per-project/per-workspace OAuth app configuration yet. The database already has a `workspaces` table with a single default workspace.
+- The current interfaces are REST/SDK and event polling. There is no agent-facing MCP server or push webhook delivery yet. Each console user has their own workspace with its own connectors, projects and connections; projects within a workspace share its connector configuration.
 - There is no automatic credential master-key rotation, audit retention cleanup, or background worker for upstream revocation retries.
 - Public deployments must configure HTTPS, database backups, and ingress rate limiting.
 

@@ -29,3 +29,9 @@ test('docs renderer supports lists, sub-headings, bold and only http(s) links, w
  assert(html.includes('<a href="https://a.example/?q=1&amp;b=2" target="_blank" rel="noopener noreferrer">site</a>'));
  assert(!html.includes('href="../sdk.ts"'));assert(!html.includes('javascript:'));assert(html.includes('<code>**raw** &lt;i&gt;</code>'));
 });
+
+test('the site root redirects to the admin console',async()=>{
+ const app=createApp({runtime:{config:{publicBaseUrl:'https://connect.example'}},initialize:async()=>{}} as unknown as Service);
+ const response=await app.request('/');
+ assert.equal(response.status,302);assert.equal(response.headers.get('location'),'/admin');
+});

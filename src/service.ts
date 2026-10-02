@@ -44,6 +44,21 @@ export class Service {
     if (rate.rows[0].count > 120) throw new AppError('rate_limited', 'Project limit: 120 requests per minute.', 429, { retry_after: 60 });
     return project;
   }
+  async workspaceOf(projectId: string, db: pg.Pool | pg.PoolClient = this.pool): Promise<string> {
+    const row = (await db.query('SELECT workspace_id FROM projects WHERE id=$1', [projectId])).rows[0];
+    if (!row) throw new AppError('not_found', 'Project not found.', 404);
+    return row.workspace_id;
+  }
+  /** Delete everything a workspace owns, revoking upstream grants of its connections first. */
+  async deleteWorkspace(workspaceId: string) {
+    const { rows } = await this.pool.query('SELECT id FROM projects WHERE workspace_id=$1', [workspaceId]);
+    for (const project of rows) await this.deleteProject(project.id);
+    await transaction(this.pool, async db => {
+      await db.query('DELETE FROM connect_sessions WHERE workspace_id=$1', [workspaceId]);
+      for (const table of ['connector_tools', 'connectors', 'connector_apps']) await db.query(`DELETE FROM ${table} WHERE workspace_id=$1`, [workspaceId]);
+      await db.query('DELETE FROM workspaces WHERE id=$1', [workspaceId]);
+    });
+  }
   async getConnection(project: string, user: string, connection: string, db: pg.Pool | pg.PoolClient = this.pool, lock = false): Promise<Connection> {
     const result = await db.query(`SELECT * FROM connections WHERE id=$1 AND project_id=$2 AND external_user_id=$3${lock ? ' FOR UPDATE' : ''}`, [connection, project, user]);
     if (!result.rows[0]) throw new AppError('not_found', 'Connection not found.', 404);
@@ -58,7 +73,7 @@ export class Service {
     return this.getConnection(c.project_id,c.external_user_id,c.id);
   }
   async createSession(project: Project, input: { external_user_id: string; connector: ConnectorName; return_url?: string }, reconnectId?: string) {
-    const active = await this.connectorStore.active(input.connector);
+    const active = await this.connectorStore.in(project.workspace_id).active(input.connector);
     if (reconnectId && connectorSpec(input.connector).auth === 'mcp') {
       const old = await this.getConnection(project.id,input.external_user_id,reconnectId);
       if (old.identity.transport !== 'mcp') throw new AppError('new_connection_required','Create a new MCP connection; legacy API connections cannot be reconnected.',409);
@@ -70,14 +85,14 @@ export class Service {
     return { id: sessionId, status: 'pending', connector: input.connector, connect_url: `${this.runtime.config.publicBaseUrl}/connect/${token}`, expires_at: expiresAt };
   }
   async getLink(token: string) {
-    const { rows } = await this.pool.query(`SELECT s.*, p.name AS project_name FROM connect_sessions s JOIN projects p ON p.id=s.project_id WHERE s.link_hash=$1 AND p.enabled=true`, [hash(token)]);
+    const { rows } = await this.pool.query(`SELECT s.*, p.name AS project_name, p.workspace_id AS project_workspace_id FROM connect_sessions s JOIN projects p ON p.id=s.project_id WHERE s.link_hash=$1 AND p.enabled=true`, [hash(token)]);
     const s = rows[0];
     if (!s || new Date(s.expires_at).getTime() <= Date.now() || s.status !== 'pending') throw new AppError('session_unavailable', 'This connection link has expired or was already used. Request a new link from your agent.', 410);
     return s;
   }
   async begin(token: string) {
     const s = await this.getLink(token);
-    await this.connectorStore.active(s.connector);
+    await this.connectorStore.in(s.project_workspace_id).active(s.connector);
     const runtime = await this.connectorStore.resolve(s.connector, s.connector_app_id);
     const state = randomToken(); const browser = randomToken(); const verifier = randomToken();
     const url = runtime.authorizeUrl(s.connector, state, verifier);
@@ -104,7 +119,7 @@ export class Service {
         const { credential, raw } = await runtime.exchange(s.connector, code!, this.vault.open<string>(s.verifier_ciphertext, s.id));
         const identity = await runtime.identify(s.connector, credential, raw);
         // Refresh the connector's tool catalog with the user's own fresh credential; optional.
-        try { await this.connectorStore.saveTools(s.connector, await runtime.mcp(s.connector).tools(credential)); } catch {}
+        try { await this.connectorStore.in(await this.workspaceOf(s.project_id)).saveTools(s.connector, await runtime.mcp(s.connector).tools(credential)); } catch {}
         connection = await transaction(this.pool, async db => {
           // Serialize identity deduplication for a project; connection-level locks serialize reconnect/disconnect.
           const project = (await db.query('SELECT enabled FROM projects WHERE id=$1 FOR UPDATE', [s.project_id])).rows[0];
@@ -139,12 +154,12 @@ export class Service {
    * Start an administrator authorization whose only purpose is reading the connector's tool
    * catalog. No connection is created and the credential is revoked right after the sync.
    */
-  async beginToolSync(connector: ConnectorName, adminId: string) {
-    const active = await this.connectorStore.active(connector);
+  async beginToolSync(connector: ConnectorName, adminId: string, workspaceId: string) {
+    const active = await this.connectorStore.in(workspaceId).active(connector);
     const sessionId = id('cs'); const state = randomToken(); const browser = randomToken(); const verifier = randomToken();
     const url = active.runtime.authorizeUrl(connector, state, verifier);
-    await this.pool.query(`INSERT INTO connect_sessions(id,project_id,external_user_id,connector,link_hash,status,state_hash,browser_hash,verifier_ciphertext,expires_at,connector_app_id,purpose)
-      VALUES($1,NULL,$2,$3,$4,'authorizing',$5,$6,$7,$8,$9,'tool_sync')`, [sessionId, adminId, connector, hash(randomToken()), hash(state), hash(browser), this.vault.seal(verifier, sessionId), new Date(Date.now() + 15 * 60 * 1000), active.appId]);
+    await this.pool.query(`INSERT INTO connect_sessions(id,project_id,external_user_id,connector,link_hash,status,state_hash,browser_hash,verifier_ciphertext,expires_at,connector_app_id,purpose,workspace_id)
+      VALUES($1,NULL,$2,$3,$4,'authorizing',$5,$6,$7,$8,$9,'tool_sync',$10)`, [sessionId, adminId, connector, hash(randomToken()), hash(state), hash(browser), this.vault.seal(verifier, sessionId), new Date(Date.now() + 15 * 60 * 1000), active.appId, workspaceId]);
     return { session: { id: sessionId, connector }, browser, url };
   }
   private async finishToolSync(s: any, code?: string, denied = false) {
@@ -156,7 +171,7 @@ export class Service {
         const { credential } = await runtime.exchange(s.connector, code!, this.vault.open<string>(s.verifier_ciphertext, s.id));
         try {
           const tools = await runtime.mcp(s.connector).tools(credential);
-          await this.connectorStore.saveTools(s.connector, tools); toolCount = tools.length;
+          await this.connectorStore.in(s.workspace_id).saveTools(s.connector, tools); toolCount = tools.length;
         } finally {
           // Token-level revocation: other grants of the same account are unaffected.
           await runtime.revoke(s.connector, credential).catch(() => {});
@@ -198,7 +213,7 @@ export class Service {
           }
           if (tool !== `${c.connector}.__discover`) return runtime.execute(tool, parsed, credential);
           const tools = await runtime.mcp(c.connector).tools(credential);
-          await this.connectorStore.saveTools(c.connector, tools, db);
+          await this.connectorStore.in(await this.workspaceOf(project, db)).saveTools(c.connector, tools, db);
           return tools;
         };
         if (credential.expiresAt && Date.parse(credential.expiresAt) < Date.now() + 60000) await refresh();
@@ -231,6 +246,10 @@ export class Service {
     const access = connectorSpec(connection.connector).access;
     if (!access) return { add_url: null, total: 0, next_page: null, data: [] };
     const result = await access.list({ call: (tool, input) => this.execute(project, user, connectionId, tool as ToolName, input), page, limit });
+    // Installing an App happens on the platform; the listing is the first place Connany sees it.
+    const identity = connection.identity && access.refresh?.(connection.identity, result.total);
+    if (identity && JSON.stringify(identity) !== JSON.stringify(connection.identity))
+      await this.pool.query('UPDATE connections SET identity=$1,updated_at=now() WHERE id=$2 AND project_id=$3', [JSON.stringify(identity), connection.id, project]);
     const runtime = await this.connectorStore.resolve(connection.connector, connection.connector_app_id);
     return { add_url: access.addUrl(runtime), total: result.total, next_page: page * limit < result.total ? page + 1 : null, data: result.data };
   }

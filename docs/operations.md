@@ -12,7 +12,7 @@ src/crypto.ts              AES-256-GCM、SHA-256、随机标识
 src/pages.ts               无外部依赖的托管连接页面
 src/admin/                 管理员认证、后台路由和页面
 src/connector-store.ts     连接器配置、加密的连接器应用凭证与连接归属
-src/workspaces.ts          默认工作空间（为多工作空间预留）
+src/workspaces.ts          用户工作空间的创建与归属
 public/admin.*             后台 CSS 和原生浏览器 JS
 sdk/client.ts              可复制的服务端 TypeScript SDK
 migrations/001_initial.sql 数据库定义
@@ -21,7 +21,7 @@ scripts/                   初始化环境、迁移、项目创建
 
 这是一个 TypeScript / Hono / PostgreSQL 模块化单体。连接页为服务端 HTML，无前端构建或 React 依赖；首版也未引入 ORM，直接使用参数化 SQL，把锁和事务边界写清楚。
 
-数据表：`workspaces`、`connectors`、`connector_apps`、`connector_tools`（按连接器缓存的工具目录，只含工具定义）、`projects`、`api_keys`、`connect_sessions`、`connections`、`events`、`rate_limits`。层级为 工作空间 → 连接器 + 项目 → API Key + 用户连接；用户用项目内的 `external_user_id` 映射，暂不单独建立 Organization、EndUser。目前只有默认工作空间 `ws_default`，连接器和项目的查询已按 `workspace_id` 过滤。管理后台另有 admin_users、admin_sessions、admin_login_limits、admin_audit 和 schema_migrations。
+数据表：`workspaces`、`connectors`、`connector_apps`、`connector_tools`（按连接器缓存的工具目录，只含工具定义）、`projects`、`api_keys`、`connect_sessions`、`connections`、`events`、`rate_limits`。层级为 后台用户 → 工作空间 → 连接器 + 项目 → API Key + 用户连接；终端用户用项目内的 `external_user_id` 映射。每个后台用户拥有一个工作空间（`workspaces.owner_id`），后台的所有查询都按当前用户的工作空间过滤，API 请求按 API Key 所属项目的工作空间过滤。升级前的数据所在的默认工作空间 `ws_default` 归第一个系统管理员；`project:create` 命令行也在该工作空间创建项目。管理后台另有 admin_users、admin_sessions、admin_login_limits、admin_audit 和 schema_migrations。
 
 ## 部署
 

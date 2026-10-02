@@ -5,6 +5,7 @@ export const githubAccess: ConnectorAccess = {
   label: '添加组织 / 仓库',
   needsAccess: identity => identity.needs_installation === true,
   addUrl: runtime => runtime.installUrl(),
+  refresh: (identity, total) => ({ ...identity, installation_count: total, needs_installation: total === 0 }),
   async list({ call, page, limit }) {
     const result = await call('github.installations.list', { page, limit }) as any;
     return {

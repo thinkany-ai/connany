@@ -81,8 +81,8 @@
     event.preventDefault();
     if (form.dataset.confirm && !(await confirmAction(form.dataset))) return;
     const button = form.querySelector('button[type="submit"]');
-    if (button.disabled) return;
-    button.disabled = true;
+    if (button?.disabled) return;
+    if (button) button.disabled = true;
     const error = form.querySelector('.form-error');
     if (error) error.hidden = true;
     const data = Object.fromEntries(new FormData(form));
@@ -115,9 +115,11 @@
       }
       else notify(form.dataset.success || '操作已完成');
     } catch (failure) {
+      // A rejected inline change (e.g. demoting the last administrator) reverts the control.
+      if (form.hasAttribute('data-auto-submit')) form.reset();
       if (error) { error.textContent = failure.message || '网络异常，请重试。'; error.hidden = false; }
       else notify(failure.message || '网络异常，请重试。');
-    } finally { button.disabled = false; }
+    } finally { if (button) button.disabled = false; }
   }));
 
   const testForm = document.querySelector('#connection-test');
@@ -227,6 +229,9 @@
       output.textContent = JSON.stringify(result,null,2); output.hidden = false;
     }));
   }
+  // Filters apply as soon as a selection changes; paging restarts from the first page.
+  // API forms go through the submit handler above; plain GET filters navigate.
+  document.querySelectorAll('form[data-auto-submit]').forEach(form => form.addEventListener('change', () => form.dataset.api ? form.requestSubmit() : form.submit()));
   document.querySelectorAll('[data-copy-code]').forEach(button => button.addEventListener('click', async () => {
     const code = button.closest('.docs-code').querySelector('pre code');
     try { await navigator.clipboard.writeText(code.textContent); notify('已复制'); }

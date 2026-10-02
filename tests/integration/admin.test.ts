@@ -147,6 +147,59 @@ test('deleting a project revokes upstream grants and removes only its data',asyn
   assert.equal((await admin(`/api/projects/${doomed.project.id}/delete`,'POST',{})).status,404);
   assert((await(await admin('/activity')).text()).includes('project.deleted'));
 });
+test('administrators manage console users; members use the workbench but not the System section',async()=>{
+  const signIn=async(email:string,password:string)=>{
+    const login=await app.request('http://localhost:3000/admin/api/login',{method:'POST',headers:{Origin:config.publicBaseUrl,'Content-Type':'application/json'},body:JSON.stringify({email,password})});
+    assert.equal(login.status,200);const session=login.headers.get('set-cookie')!.split(';')[0];
+    const page=await(await app.request('http://localhost:3000/admin',{headers:{Cookie:session}})).text();
+    const token=page.match(/name="csrf-token" content="([^"]+)"/)![1];
+    return {page,call:(path:string,method='GET',body?:unknown)=>app.request(`http://localhost:3000/admin${path}`,{method,redirect:'manual',headers:{Cookie:session,Origin:config.publicBaseUrl,'Content-Type':'application/json','X-CSRF-Token':token},...(body===undefined?{}:{body:JSON.stringify(body)})})};
+  };
+  const created=await admin('/api/users','POST',{email:'Member@Example.com',password:'member-password-123'});assert.equal(created.status,201);
+  const member=(await created.json() as any).user;assert.equal(member.role,'member');assert.equal(member.email,'member@example.com');
+  assert.equal((await admin('/api/users','POST',{email:'member@example.com',password:'member-password-123'})).status,409);
+  assert.equal((await admin('/api/users','POST',{email:'weak@example.com',password:'short'})).status,400);
+  assert((await(await admin('/users')).text()).includes('member@example.com'));
+  // Members see the workbench but no System section, and cannot reach user management.
+  const asMember=await signIn('member@example.com','member-password-123');
+  assert(asMember.page.includes('/admin/projects'));assert(!asMember.page.includes('/admin/users'));
+  assert.equal((await asMember.call('/users')).status,302);
+  assert.equal((await asMember.call('/api/users')).status,403);
+  assert.equal((await asMember.call('/api/users','POST',{email:'x@example.com',password:'member-password-123'})).status,403);
+  assert.equal((await asMember.call('/api/projects')).status,200);
+  // Role changes; the last administrator and one's own account are protected.
+  const me=(await(await admin('/api/users')).json() as any).data.find((u:any)=>u.email==='admin@example.com');
+  assert.equal((await admin(`/api/users/${me.id}/role`,'POST',{role:'member'})).status,400);
+  assert.equal((await admin(`/api/users/${me.id}/delete`,'POST',{})).status,400);
+  assert.equal((await admin(`/api/users/${member.id}/role`,'POST',{role:'admin'})).status,200);
+  assert(!(await asMember.call('/api/users')).status.toString().startsWith('4'));
+  assert.equal((await admin(`/api/users/${member.id}/role`,'POST',{role:'member'})).status,200);
+  // A password reset signs the user out everywhere.
+  assert.equal((await admin(`/api/users/${member.id}/password`,'POST',{password:'member-password-456'})).status,200);
+  assert.equal((await asMember.call('/api/projects')).status,401);
+  const again=await signIn('member@example.com','member-password-456');
+  // Each user has a workspace: projects, connectors and connections never leak across users.
+  const adminProjects=(await(await admin('/api/projects')).json() as any).data;assert(adminProjects.length>0);
+  assert.equal(((await(await again.call('/api/projects')).json()) as any).data.length,0);
+  assert.equal((await again.call(`/projects/${adminProjects[0].id}`)).status,404);
+  assert.equal((await again.call(`/api/projects/${adminProjects[0].id}/status`,'POST',{enabled:false})).status,404);
+  assert.equal(((await(await again.call('/api/connections')).json()) as any).data.length,0);
+  assert(((await(await again.call('/api/connectors')).json()) as any).data.every((c:any)=>!c.enabled&&!c.client_id));
+  const memberProject=await again.call('/api/projects','POST',{name:'Member project'});assert.equal(memberProject.status,201);
+  const memberKey=(await memberProject.json() as any).api_key;
+  assert.equal(((await(await api(memberKey,'/connectors')).json()) as any).data.length,0);
+  assert.equal((await api(memberKey,'/connectors/github/sessions','POST',{external_user_id:'u'})).status,503);
+  assert.equal((await api(memberKey,`/connections/${connectionA}?external_user_id=same-user`)).status,404);
+  assert.equal(((await(await admin('/api/projects')).json()) as any).data.some((p:any)=>p.name==='Member project'),false);
+  // Deleting keeps the audit trail readable.
+  assert.equal((await admin(`/api/users/${member.id}/delete`,'POST',{})).status,200);
+  assert.equal((await again.call('/api/projects')).status,401);
+  assert.equal((await pool.query('SELECT 1 FROM workspaces WHERE owner_id=$1',[member.id])).rowCount,0);
+  assert.equal((await pool.query("SELECT 1 FROM projects WHERE name='Member project'")).rowCount,0);
+  assert.equal((await api(memberKey,'/connectors')).status,401);
+  const activity=await(await admin('/activity')).text();assert(activity.includes('member@example.com'));assert(activity.includes('project.created'));
+  assert.equal((await admin(`/api/users/${member.id}/delete`,'POST',{})).status,404);
+});
 test('logout and admin password reset revoke sessions, and login attempts are limited',async()=>{
   assert.equal((await admin('/api/logout','POST',{})).status,200);assert.equal((await admin('/api/projects')).status,401);
   const login=await admin('/api/login','POST',{email:'admin@example.com',password:'test-admin-password-123'});cookie=login.headers.get('set-cookie')!.split(';')[0];

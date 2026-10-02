@@ -28,7 +28,7 @@ openssl rand -base64 32    # 填入 TOKEN_ENCRYPTION_KEY
 docker compose --env-file deploy/docker/.env -f deploy/docker/compose.yaml up -d --build
 docker compose --env-file deploy/docker/.env -f deploy/docker/compose.yaml ps -a
 docker compose --env-file deploy/docker/.env -f deploy/docker/compose.yaml logs migrate
-# 密码交互输入，不回显；至少 12 位。
+# 密码交互输入，不回显；至少 8 位。
 docker compose --env-file deploy/docker/.env -f deploy/docker/compose.yaml exec app \
   node dist/scripts/create-admin.js admin@example.com
 curl --fail http://localhost:3000/health

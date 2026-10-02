@@ -55,10 +55,10 @@ curl "$CONNANY_BASE_URL/v1/connectors" \
 响应示例：
 
 ```json
-{"data":[{"name":"notion","title":"Notion","avatar_url":"{{BASE_URL}}/connectors/notion/avatar.svg","tools_synced_at":"2026-09-26T10:00:00.000Z"},{"name":"github","title":"GitHub","avatar_url":"{{BASE_URL}}/connectors/github/avatar.svg","tools_synced_at":"2026-09-26T10:00:00.000Z"},{"name":"linear","title":"Linear","avatar_url":"{{BASE_URL}}/connectors/linear/avatar.svg","tools_synced_at":null}]}
+{"data":[{"name":"notion","title":"Notion","description":"页面、数据库与工作区搜索","avatar_url":"{{BASE_URL}}/connectors/notion/avatar.svg","tools_synced_at":"2026-09-26T10:00:00.000Z"},{"name":"github","title":"GitHub","description":"仓库、Issue 与 Pull Request","avatar_url":"{{BASE_URL}}/connectors/github/avatar.svg","tools_synced_at":"2026-09-26T10:00:00.000Z"},{"name":"linear","title":"Linear","description":"Issue、项目与团队协作","avatar_url":"{{BASE_URL}}/connectors/linear/avatar.svg","tools_synced_at":null}]}
 ```
 
-name 用于创建授权会话的路径 /v1/connectors/{name}/sessions，目前可能是 notion、github、linear；列表出现某个连接器不代表用户已授权。avatar_url 是无需鉴权的 SVG 图标，可直接用于 img 标签。
+name 用于创建授权会话的路径 /v1/connectors/{name}/sessions，目前可能是 notion、github、linear；列表出现某个连接器不代表用户已授权。description 是一句话的能力介绍，可用于连接入口。avatar_url 是无需鉴权的 SVG 图标，可直接用于 img 标签。
 
 ## 创建授权会话
 

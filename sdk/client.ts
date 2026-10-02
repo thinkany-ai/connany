@@ -34,7 +34,7 @@ export class Connany {
     if (!response.ok) throw new ConnanyError(response.status, result.error?.code || 'request_failed', result.error?.message || 'Connany request failed.', result.request_id, result.error?.details);
     return result as T;
   }
-  connectors() { return this.request<{ data: { name: ConnectorName; title: string; avatar_url: string; tools_synced_at: string | null }[] }>('/v1/connectors'); }
+  connectors() { return this.request<{ data: { name: ConnectorName; title: string; description: string; avatar_url: string; tools_synced_at: string | null }[] }>('/v1/connectors'); }
   /** Tools the user can use now through an authorized connection. Use this in agent conversations. */
   listTools(connectionId: string, externalUserId: string, options: { query?: string; limit?: number; offset?: number; read_only?: boolean } = {}) {
     const query = new URLSearchParams({ external_user_id: externalUserId });

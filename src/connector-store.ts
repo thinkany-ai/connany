@@ -23,6 +23,8 @@ export interface ConnectorView {
 export interface ToolDefinition { name: string; connector: ConnectorName; description: string; read_only: boolean; required_permissions: string[]; input_schema: Record<string, unknown> }
 export class ConnectorStore {
   constructor(public pool: pg.Pool, public base: ConnectorRuntime, private vault: Vault, public workspaceId = defaultWorkspaceId) {}
+  /** The same store scoped to another workspace. */
+  in(workspaceId: string) { return new ConnectorStore(this.pool, this.base, this.vault, workspaceId); }
   // Encryption context of stored app secrets. The literal predates the connector rename; keep it.
   private context(appId: string) { return `provider-app:${appId}`; }
   /** Import legacy env credentials only once. Database settings win after initial import. */

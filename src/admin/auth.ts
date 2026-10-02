@@ -3,9 +3,10 @@ import type pg from 'pg';
 import { hash, id, randomToken } from '../crypto.js';
 import { transaction } from '../db.js';
 import { AppError } from '../errors.js';
+import { ensureWorkspace } from '../workspaces.js';
 import { z } from 'zod';
 export const emailSchema = z.string().trim().toLowerCase().email().max(254);
-export const passwordSchema = z.string().min(12).max(256);
+export const passwordSchema = z.string().min(8).max(256);
 function derive(password: string, salt: string): Promise<Buffer> {
   return new Promise((resolve,reject) => scrypt(password, salt, 64, { N: 32768, r: 8, p: 1, maxmem: 64 * 1024 * 1024 }, (error, key) => error ? reject(error) : resolve(key)));
 }
@@ -19,12 +20,17 @@ export async function verifyPassword(password: string, stored: string) {
   return timingSafeEqual(await derive(password,salt),Buffer.from(expected,'hex'));
 }
 export function csrfToken(sessionToken: string) { return hash(`admin-csrf:${sessionToken}`); }
-export interface AdminIdentity { id: string; email: string }
+/** admin: system administrator who also manages console users; member: workbench only. */
+export const roleSchema = z.enum(['admin','member']);
+export type AdminRole = z.infer<typeof roleSchema>;
+export interface AdminIdentity { id: string; email: string; role: AdminRole; workspace_id: string }
 export async function createAdmin(pool: pg.Pool, email: string, password: string) {
   const normalized = emailSchema.parse(email); const passwordHash = await hashPassword(password);
   return transaction(pool, async db => {
-    const { rows } = await db.query(`INSERT INTO admin_users(id,email,password_hash) VALUES($1,$2,$3)
-      ON CONFLICT(email) DO UPDATE SET password_hash=EXCLUDED.password_hash RETURNING id,email`, [id('admin'),normalized,passwordHash]);
+    // The CLI provisions system administrators; rerunning it resets the password and restores the role.
+    const { rows } = await db.query(`INSERT INTO admin_users(id,email,password_hash,role) VALUES($1,$2,$3,'admin')
+      ON CONFLICT(email) DO UPDATE SET password_hash=EXCLUDED.password_hash,role='admin' RETURNING id,email,role`, [id('admin'),normalized,passwordHash]);
+    rows[0].workspace_id = await ensureWorkspace(db, rows[0]);
     await db.query('DELETE FROM admin_sessions WHERE admin_id=$1',[rows[0].id]);
     return rows[0] as AdminIdentity;
   });
@@ -54,7 +60,10 @@ export class AdminAuth {
   }
   async current(token?: string): Promise<AdminIdentity | null> {
     if (!token || token.length !== 43) return null;
-    return (await this.pool.query('SELECT u.id,u.email FROM admin_sessions s JOIN admin_users u ON u.id=s.admin_id WHERE s.token_hash=$1 AND s.expires_at>now()',[hash(token)])).rows[0] || null;
+    const user = (await this.pool.query(`SELECT u.id,u.email,u.role,(SELECT w.id FROM workspaces w WHERE w.owner_id=u.id ORDER BY w.created_at, w.id LIMIT 1) AS workspace_id
+      FROM admin_sessions s JOIN admin_users u ON u.id=s.admin_id WHERE s.token_hash=$1 AND s.expires_at>now()`,[hash(token)])).rows[0];
+    if (user && !user.workspace_id) user.workspace_id = await ensureWorkspace(this.pool, user);
+    return user || null;
   }
   async changePassword(adminId: string, currentPassword: string, newPassword: string) {
     z.string().min(1).max(256).parse(currentPassword);
@@ -74,4 +83,69 @@ export class AdminAuth {
     });
   }
   async logout(token: string) { await this.pool.query('DELETE FROM admin_sessions WHERE token_hash=$1',[hash(token)]); }
+}
+
+/** Console user management for system administrators. Every change is audited. */
+export class ConsoleUsers {
+  constructor(private pool: pg.Pool) {}
+  list() {
+    return this.pool.query(`SELECT u.id,u.email,u.role,u.created_at,(SELECT max(s.created_at) FROM admin_sessions s WHERE s.admin_id=u.id) AS last_login_at
+      FROM admin_users u ORDER BY u.role, u.email`).then(r => r.rows);
+  }
+  async create(actor: AdminIdentity, input: { email: string; password: string; role: AdminRole }) {
+    const email = emailSchema.parse(input.email); const passwordHash = await hashPassword(input.password);
+    return transaction(this.pool, async db => {
+      const { rows } = await db.query(`INSERT INTO admin_users(id,email,password_hash,role) VALUES($1,$2,$3,$4) ON CONFLICT(email) DO NOTHING RETURNING id,email,role`, [id('admin'),email,passwordHash,input.role]);
+      if (!rows[0]) throw new AppError('user_exists','该邮箱已存在。',409);
+      await ensureWorkspace(db, rows[0]);
+      await this.audit(db, actor, 'user.created', email);
+      return rows[0];
+    });
+  }
+  async setRole(actor: AdminIdentity, userId: string, role: AdminRole) {
+    if (userId === actor.id) throw new AppError('own_role','不能修改自己的身份。',400);
+    return transaction(this.pool, async db => {
+      const user = await this.lock(db, userId);
+      if (user.role === 'admin' && role !== 'admin') await this.keepAnAdmin(db);
+      await db.query('UPDATE admin_users SET role=$1 WHERE id=$2',[role,userId]);
+      await this.audit(db, actor, `user.role_${role}`, user.email);
+      return { ...user, role };
+    });
+  }
+  async resetPassword(actor: AdminIdentity, userId: string, password: string) {
+    const passwordHash = await hashPassword(password);
+    await transaction(this.pool, async db => {
+      const user = await this.lock(db, userId);
+      await db.query('UPDATE admin_users SET password_hash=$1 WHERE id=$2',[passwordHash,userId]);
+      // A reset signs the user out everywhere.
+      await db.query('DELETE FROM admin_sessions WHERE admin_id=$1',[userId]);
+      await this.audit(db, actor, 'user.password_reset', user.email);
+    });
+  }
+  /** Deletes the user after `deleteData` removed their workspaces (which may call upstream APIs). */
+  async remove(actor: AdminIdentity, userId: string, deleteData: (userId: string) => Promise<void>) {
+    if (userId === actor.id) throw new AppError('delete_self','不能删除自己的账号。',400);
+    const check = async (db: pg.PoolClient) => { const user = await this.lock(db, userId); if (user.role === 'admin') await this.keepAnAdmin(db); return user; };
+    await transaction(this.pool, check);
+    await deleteData(userId);
+    await transaction(this.pool, async db => {
+      const user = await check(db);
+      await db.query('UPDATE admin_audit SET actor_email=$1 WHERE admin_id=$2 AND actor_email IS NULL',[user.email,userId]);
+      await db.query('DELETE FROM admin_users WHERE id=$1',[userId]);
+      await this.audit(db, actor, 'user.deleted', user.email);
+    });
+  }
+  private async lock(db: pg.PoolClient, userId: string) {
+    const user = (await db.query('SELECT id,email,role FROM admin_users WHERE id=$1 FOR UPDATE',[userId])).rows[0];
+    if (!user) throw new AppError('not_found','用户不存在。',404);
+    return user as AdminIdentity;
+  }
+  /** Called before removing an administrator: at least one must remain. */
+  private async keepAnAdmin(db: pg.PoolClient) {
+    const { rows } = await db.query("SELECT id FROM admin_users WHERE role='admin' FOR UPDATE");
+    if (rows.length <= 1) throw new AppError('last_admin','至少需要保留一个系统管理员。',409);
+  }
+  private audit(db: pg.PoolClient, actor: AdminIdentity, action: string, target: string) {
+    return db.query('INSERT INTO admin_audit(admin_id,actor_email,action,target) VALUES($1,$2,$3,$4)',[actor.id,actor.email,action,target]);
+  }
 }

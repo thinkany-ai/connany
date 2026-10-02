@@ -22,6 +22,8 @@ export interface ConnectorAccess {
   needsAccess: (identity: Record<string, any>) => boolean;
   addUrl: (runtime: ConnectorRuntime) => string;
   list: (context: { call: (tool: string, input: Record<string, unknown>) => Promise<unknown>; page: number; limit: number }) => Promise<{ total: number; data: AccessGrant[] }>;
+  /** Identity after a fresh listing, so needsAccess stops reporting work the user already did. */
+  refresh?: (identity: Record<string, any>, total: number) => Record<string, any>;
 }
 export interface McpSpec {
   origin: string;

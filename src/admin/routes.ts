@@ -2,8 +2,8 @@ import { Hono } from 'hono';
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
 import { readFile } from 'node:fs/promises';
 import { z } from 'zod';
-import { AdminAuth, csrfToken, type AdminIdentity } from './auth.js';
-import { layout, loginPage, overview, connectorList, connectorHref, projectList, connectionsPage, activityPage, agentDocsPage, docsPage, testPage, projectDetail } from './pages.js';
+import { AdminAuth, ConsoleUsers, csrfToken, passwordSchema, roleSchema, emailSchema, type AdminIdentity } from './auth.js';
+import { layout, loginPage, overview, connectorList, connectorHref, projectList, connectionsPage, activityPage, agentDocsPage, docsPage, testPage, projectDetail, usersPage } from './pages.js';
 import { connectorNames } from '../config.js';
 import { connector as connectorSpec } from '../connectors/catalog.js';
 import { connectorAppInput } from '../connector-store.js';
@@ -17,6 +17,7 @@ import { publicConnection, type Service } from '../service.js';
 export function mountAdmin(root: Hono<any>, service: Service) {
   const app = new Hono<{ Variables: { admin: AdminIdentity; csrf: string; sessionToken: string } }>();
   const auth = new AdminAuth(service.pool);
+  const users = new ConsoleUsers(service.pool);
   const base = () => service.runtime.config.publicBaseUrl;
   const secure = () => base().startsWith('https:');
   const cookieOptions = () => ({ httpOnly: true, secure: secure(), sameSite: 'Strict' as const, path: '/admin', maxAge: 8 * 3600 });
@@ -37,6 +38,11 @@ export function mountAdmin(root: Hono<any>, service: Service) {
       return c.redirect('/admin/login');
     }
     c.set('admin',admin); c.set('sessionToken',token); c.set('csrf',csrfToken(token));
+    // The System section (user management) is for administrators only.
+    if (admin.role !== 'admin' && (path === '/users' || path.startsWith('/users/') || path.startsWith('/api/users'))) {
+      if (path.startsWith('/api/')) throw new AppError('forbidden','需要系统管理员权限。',403);
+      return c.redirect('/admin');
+    }
     if (!['GET','HEAD'].includes(c.req.method) && c.req.header('X-CSRF-Token') !== csrfToken(token)) throw new AppError('invalid_csrf','页面已失效，请刷新后重试。',403);
     await next();
   });
@@ -55,52 +61,55 @@ export function mountAdmin(root: Hono<any>, service: Service) {
     await auth.logout(c.get('sessionToken')); deleteCookie(c,'connany_admin',{path:'/admin',secure:secure()}); return c.json({ok:true});
   });
   app.post('/api/account/password', async c => {
-    const input = z.object({current_password:z.string().min(1).max(256),new_password:z.string().min(12).max(256),confirm_password:z.string().min(12).max(256)}).strict().parse(await c.req.json());
+    const input = z.object({current_password:z.string().min(1).max(256),new_password:z.string().min(8).max(256),confirm_password:z.string().min(8).max(256)}).strict().parse(await c.req.json());
     if (input.new_password !== input.confirm_password) throw new AppError('password_mismatch','两次输入的新密码不一致。',400);
     await auth.changePassword(c.get('admin').id,input.current_password,input.new_password);
     deleteCookie(c,'connany_admin',{path:'/admin',secure:secure()});
     return c.json({ok:true});
   });
-  const render = (c: any, title: string, active: string, content: string) => c.html(layout(title,active,c.get('admin').email,c.get('csrf'),content));
+  // Everything in the console is scoped to the signed-in user's workspace.
+  const ws = (c: any): string => c.get('admin').workspace_id;
+  const store = (c: any) => service.connectorStore.in(ws(c));
+  const render = (c: any, title: string, active: string, content: string) => c.html(layout(title,active,c.get('admin').email,c.get('csrf'),content,c.get('admin').role));
   app.get('/', async c => {
-    const [connectors, counts] = await Promise.all([service.connectorStore.list(), service.pool.query(`SELECT (SELECT count(*) FROM projects)::int AS projects,(SELECT count(*) FROM projects WHERE enabled)::int AS active_projects,(SELECT count(*) FROM connections WHERE status='connected')::int AS connections`)]);
+    const [connectors, counts] = await Promise.all([store(c).list(), service.pool.query(`SELECT (SELECT count(*) FROM projects WHERE workspace_id=$1)::int AS projects,(SELECT count(*) FROM projects WHERE workspace_id=$1 AND enabled)::int AS active_projects,(SELECT count(*) FROM connections c JOIN projects p ON p.id=c.project_id WHERE p.workspace_id=$1 AND c.status='connected')::int AS connections`,[ws(c)])]);
     return render(c,'总览','overview',overview(connectors,counts.rows[0]));
   });
-  app.get('/connectors', async c => render(c,'连接器','connectors',connectorList(await service.connectorStore.list())));
+  app.get('/connectors', async c => render(c,'连接器','connectors',connectorList(await store(c).list())));
   app.get('/connectors/:connector', async c => {
     const connector = z.enum(connectorNames).parse(c.req.param('connector'));
     return c.redirect(connectorHref(connector), 302);
   });
-  app.get('/api/connectors', async c => c.json({data:await service.connectorStore.list()}));
+  app.get('/api/connectors', async c => c.json({data:await store(c).list()}));
   app.post('/api/connectors/:connector', async c => {
     const connector = z.enum(connectorNames).parse(c.req.param('connector'));
     if (connectorSpec(connector).auth === 'mcp') {
       const input=z.object({enabled:z.boolean()}).strict().parse(await c.req.json());
-      await service.connectorStore.saveMcp(connector,input.enabled,c.get('admin').id);
+      await store(c).saveMcp(connector,input.enabled,c.get('admin').id);
     } else {
       const body = await c.req.json();
       const toggle = z.object({enabled:z.boolean()}).strict().safeParse(body);
-      if (toggle.success) await service.connectorStore.setEnabled(connector,toggle.data.enabled,c.get('admin').id);
-      else await service.connectorStore.save(connector,connectorAppInput.parse(body),c.get('admin').id);
+      if (toggle.success) await store(c).setEnabled(connector,toggle.data.enabled,c.get('admin').id);
+      else await store(c).save(connector,connectorAppInput.parse(body),c.get('admin').id);
     }
     return c.json({ok:true});
   });
   app.post('/api/connectors/:connector/tool-sync', async c => {
     const connector = z.enum(connectorNames).parse(c.req.param('connector'));
-    const { session, browser, url } = await service.beginToolSync(connector, c.get('admin').id);
+    const { session, browser, url } = await service.beginToolSync(connector, c.get('admin').id, ws(c));
     setCookie(c, `connany_${session.id}`, browser, { httpOnly: true, secure: secure(), sameSite: 'Lax', path: `/oauth/${connector}/callback`, maxAge: 900 });
     return c.json({ redirect_url: url });
   });
   const audit = (db: { query: (sql: string, values: unknown[]) => Promise<unknown> }, adminId: string, action: string, target: string) =>
     db.query('INSERT INTO admin_audit(admin_id,action,target) VALUES($1,$2,$3)',[adminId,action,target]);
-  async function listProjects(after='') {
+  async function listProjects(workspaceId: string, after='') {
     return (await service.pool.query(`SELECT ${publicProjectColumns.split(',').map(column=>`p.${column}`).join(',')},
       (SELECT count(*) FROM connections c WHERE c.project_id=p.id)::int AS connection_count,
       (SELECT count(*) FROM api_keys k WHERE k.project_id=p.id AND k.revoked_at IS NULL)::int AS api_key_count
-      FROM projects p WHERE p.workspace_id=$1 AND p.id>$2 ORDER BY p.id LIMIT 51`,[service.connectorStore.workspaceId,after])).rows;
+      FROM projects p WHERE p.workspace_id=$1 AND p.id>$2 ORDER BY p.id LIMIT 51`,[workspaceId,after])).rows;
   }
-  async function getProject(projectId: string) {
-    const {rows} = await service.pool.query(`SELECT ${publicProjectColumns},(SELECT count(*) FROM connections c WHERE c.project_id=projects.id)::int AS connection_count FROM projects WHERE id=$1 AND workspace_id=$2`,[projectId,service.connectorStore.workspaceId]);
+  async function getProject(workspaceId: string, projectId: string) {
+    const {rows} = await service.pool.query(`SELECT ${publicProjectColumns},(SELECT count(*) FROM connections c WHERE c.project_id=projects.id)::int AS connection_count FROM projects WHERE id=$1 AND workspace_id=$2`,[projectId,workspaceId]);
     if (!rows[0]) throw new AppError('not_found','Project 不存在。',404);
     return rows[0];
   }
@@ -110,22 +119,22 @@ export function mountAdmin(root: Hono<any>, service: Service) {
     return {apiKey:rows[0],key};
   }
   app.get('/projects', async c => {
-    const rows = await listProjects(c.req.query('after'));
+    const rows = await listProjects(ws(c),c.req.query('after'));
     return render(c,'项目','projects',projectList(rows.slice(0,50),rows.length>50?rows[49].id:null));
   });
   app.get('/projects/:id', async c => {
-    const project = await getProject(c.req.param('id'));
+    const project = await getProject(ws(c),c.req.param('id'));
     const {rows: keys} = await service.pool.query(`SELECT ${publicApiKeyColumns} FROM api_keys WHERE project_id=$1 ORDER BY revoked_at IS NOT NULL, created_at DESC`,[project.id]);
     return render(c,project.name,'projects',projectDetail(project,keys));
   });
   app.get('/keys', c => c.redirect('/admin/projects', 301));
   app.get('/api/projects', async c => {
-    const rows = await listProjects(c.req.query('after')); return c.json({data:rows.slice(0,50),next_cursor:rows.length>50?rows[49].id:null});
+    const rows = await listProjects(ws(c),c.req.query('after')); return c.json({data:rows.slice(0,50),next_cursor:rows.length>50?rows[49].id:null});
   });
   app.post('/api/projects', async c => {
     const input = projectInput.parse(await c.req.json()); const projectId = id('proj');
     const result = await transaction(service.pool,async db => {
-      const {rows} = await db.query(`INSERT INTO projects(id,workspace_id,name,return_urls) VALUES($1,$2,$3,$4) RETURNING ${publicProjectColumns}`, [projectId,service.connectorStore.workspaceId,input.name,JSON.stringify(input.return_urls ?? [])]);
+      const {rows} = await db.query(`INSERT INTO projects(id,workspace_id,name,return_urls) VALUES($1,$2,$3,$4) RETURNING ${publicProjectColumns}`, [projectId,ws(c),input.name,JSON.stringify(input.return_urls ?? [])]);
       const issued = await issueApiKey(db,projectId);
       await audit(db,c.get('admin').id,'project.created',projectId);
       return {project:rows[0],...issued};
@@ -135,7 +144,7 @@ export function mountAdmin(root: Hono<any>, service: Service) {
   app.post('/api/projects/:id', async c => {
     const input = projectInput.parse(await c.req.json());
     const project = await transaction(service.pool,async db => {
-      const {rows} = await db.query(`UPDATE projects SET name=$1,return_urls=COALESCE($2::jsonb,return_urls),updated_at=now() WHERE id=$3 AND workspace_id=$4 RETURNING ${publicProjectColumns}`,[input.name,input.return_urls ? JSON.stringify(input.return_urls) : null,c.req.param('id'),service.connectorStore.workspaceId]);
+      const {rows} = await db.query(`UPDATE projects SET name=$1,return_urls=COALESCE($2::jsonb,return_urls),updated_at=now() WHERE id=$3 AND workspace_id=$4 RETURNING ${publicProjectColumns}`,[input.name,input.return_urls ? JSON.stringify(input.return_urls) : null,c.req.param('id'),ws(c)]);
       if (!rows[0]) throw new AppError('not_found','Project 不存在。',404);
       await audit(db,c.get('admin').id,'project.updated',c.req.param('id'));return rows[0];
     });
@@ -144,7 +153,7 @@ export function mountAdmin(root: Hono<any>, service: Service) {
   app.post('/api/projects/:id/status', async c => {
     const input = z.object({enabled:z.boolean()}).strict().parse(await c.req.json());
     const project = await transaction(service.pool,async db => {
-      const {rows} = await db.query(`UPDATE projects SET enabled=$1,updated_at=now() WHERE id=$2 AND workspace_id=$3 RETURNING ${publicProjectColumns}`,[input.enabled,c.req.param('id'),service.connectorStore.workspaceId]);
+      const {rows} = await db.query(`UPDATE projects SET enabled=$1,updated_at=now() WHERE id=$2 AND workspace_id=$3 RETURNING ${publicProjectColumns}`,[input.enabled,c.req.param('id'),ws(c)]);
       if (!rows[0]) throw new AppError('not_found','Project 不存在。',404);
       if (!input.enabled) await db.query("UPDATE connect_sessions SET status='error',error_code='project_disabled',state_hash=NULL,browser_hash=NULL,verifier_ciphertext=NULL WHERE project_id=$1 AND status IN ('pending','authorizing')",[c.req.param('id')]);
       await audit(db,c.get('admin').id,input.enabled?'project.enabled':'project.disabled',c.req.param('id'));return rows[0];
@@ -152,14 +161,14 @@ export function mountAdmin(root: Hono<any>, service: Service) {
     return c.json({project});
   });
   app.post('/api/projects/:id/delete', async c => {
-    const project = await getProject(c.req.param('id'));
+    const project = await getProject(ws(c),c.req.param('id'));
     const result = await service.deleteProject(project.id);
     await audit(service.pool,c.get('admin').id,'project.deleted',project.id);
     return c.json({ok:true,...result});
   });
   app.post('/api/projects/:id/api-keys', async c => {
     const input = z.object({name:z.string().trim().max(100).default('')}).strict().parse(await c.req.json());
-    const project = await getProject(c.req.param('id'));
+    const project = await getProject(ws(c),c.req.param('id'));
     const result = await transaction(service.pool,async db => {
       await db.query('SELECT 1 FROM projects WHERE id=$1 FOR UPDATE',[project.id]);
       const active = (await db.query('SELECT count(*)::int AS count FROM api_keys WHERE project_id=$1 AND revoked_at IS NULL',[project.id])).rows[0].count;
@@ -172,37 +181,58 @@ export function mountAdmin(root: Hono<any>, service: Service) {
   });
   app.post('/api/api-keys/:id/revoke', async c => {
     const key = await transaction(service.pool,async db => {
-      const {rows} = await db.query(`UPDATE api_keys k SET revoked_at=COALESCE(k.revoked_at,now()) FROM projects p WHERE k.id=$1 AND p.id=k.project_id AND p.workspace_id=$2 RETURNING ${publicApiKeyColumns.split(',').map(column=>`k.${column}`).join(',')}`,[c.req.param('id'),service.connectorStore.workspaceId]);
+      const {rows} = await db.query(`UPDATE api_keys k SET revoked_at=COALESCE(k.revoked_at,now()) FROM projects p WHERE k.id=$1 AND p.id=k.project_id AND p.workspace_id=$2 RETURNING ${publicApiKeyColumns.split(',').map(column=>`k.${column}`).join(',')}`,[c.req.param('id'),ws(c)]);
       if (!rows[0]) throw new AppError('not_found','API Key 不存在。',404);
       await audit(db,c.get('admin').id,'api_key.revoked',c.req.param('id'));return rows[0];
     });
     return c.json({key});
   });
-  async function connectionRows(project='',connector='',after='') {
-    return (await service.pool.query(`SELECT c.*,p.name AS project_name FROM connections c JOIN projects p ON p.id=c.project_id WHERE ($1='' OR c.project_id=$1) AND ($2='' OR c.connector=$2) AND c.id>$3 ORDER BY c.id LIMIT 51`,[project,connector,after])).rows;
+  async function connectionRows(workspaceId: string, project='',connector='',after='') {
+    return (await service.pool.query(`SELECT c.*,p.name AS project_name FROM connections c JOIN projects p ON p.id=c.project_id WHERE p.workspace_id=$4 AND ($1='' OR c.project_id=$1) AND ($2='' OR c.connector=$2) AND c.id>$3 ORDER BY c.id LIMIT 51`,[project,connector,after,workspaceId])).rows;
   }
   app.get('/connections', async c => {
     const project=c.req.query('project_id') || ''; const connector=c.req.query('connector') || '';
-    const rows=await connectionRows(project,connector,c.req.query('after'));
-    return render(c,'用户连接','connections',connectionsPage(rows.slice(0,50),project,connector,rows.length>50?rows[49].id:null));
+    const [rows,projects]=await Promise.all([connectionRows(ws(c),project,connector,c.req.query('after')),service.pool.query('SELECT id,name FROM projects WHERE workspace_id=$1 ORDER BY name',[ws(c)])]);
+    return render(c,'用户连接','connections',connectionsPage(rows.slice(0,50),projects.rows,project,connector,rows.length>50?rows[49].id:null));
   });
   app.get('/api/connections', async c => {
-    const rows=await connectionRows(c.req.query('project_id'),c.req.query('connector'),c.req.query('after'));
+    const rows=await connectionRows(ws(c),c.req.query('project_id'),c.req.query('connector'),c.req.query('after'));
     return c.json({data:rows.slice(0,50).map(row=>({...publicConnection(row),project_id:row.project_id,project_name:row.project_name})),next_cursor:rows.length>50?rows[49].id:null});
   });
   app.post('/api/connections/:id/disconnect', async c => {
-    const connection=(await service.pool.query('SELECT project_id,external_user_id FROM connections WHERE id=$1',[c.req.param('id')])).rows[0];
+    const connection=(await service.pool.query('SELECT c.project_id,c.external_user_id FROM connections c JOIN projects p ON p.id=c.project_id WHERE c.id=$1 AND p.workspace_id=$2',[c.req.param('id'),ws(c)])).rows[0];
     if (!connection) throw new AppError('not_found','连接不存在。',404);
     const result=await service.disconnect(connection.project_id,connection.external_user_id,c.req.param('id'));
     await service.pool.query('INSERT INTO admin_audit(admin_id,action,target) VALUES($1,$2,$3)',[c.get('admin').id,'connection.disconnected',c.req.param('id')]);
     return c.json(result);
   });
+  app.get('/users', async c => render(c,'用户管理','users',usersPage(await users.list(),c.get('admin'))));
+  app.get('/api/users', async c => c.json({data:await users.list()}));
+  app.post('/api/users', async c => {
+    const input = z.object({email:emailSchema,password:passwordSchema,role:roleSchema.default('member')}).strict().parse(await c.req.json());
+    return c.json({user:await users.create(c.get('admin'),input)},201);
+  });
+  app.post('/api/users/:id/role', async c => {
+    const {role} = z.object({role:roleSchema}).strict().parse(await c.req.json());
+    return c.json({user:await users.setRole(c.get('admin'),c.req.param('id'),role)});
+  });
+  app.post('/api/users/:id/password', async c => {
+    const {password} = z.object({password:passwordSchema}).strict().parse(await c.req.json());
+    await users.resetPassword(c.get('admin'),c.req.param('id'),password); return c.json({ok:true});
+  });
+  app.post('/api/users/:id/delete', async c => {
+    await users.remove(c.get('admin'),c.req.param('id'),async userId => {
+      const { rows } = await service.pool.query('SELECT id FROM workspaces WHERE owner_id=$1',[userId]);
+      for (const workspace of rows) await service.deleteWorkspace(workspace.id);
+    });
+    return c.json({ok:true});
+  });
   app.get('/activity', async c => {
-    const [events,audits]=await Promise.all([service.pool.query('SELECT e.*,p.name AS project_name FROM events e JOIN projects p ON p.id=e.project_id ORDER BY e.seq DESC LIMIT 100'),service.pool.query('SELECT a.*,u.email FROM admin_audit a JOIN admin_users u ON u.id=a.admin_id ORDER BY a.seq DESC LIMIT 100')]);
+    const [events,audits]=await Promise.all([service.pool.query('SELECT e.*,p.name AS project_name FROM events e JOIN projects p ON p.id=e.project_id WHERE p.workspace_id=$1 ORDER BY e.seq DESC LIMIT 100',[ws(c)]),service.pool.query('SELECT a.*,COALESCE(u.email,a.actor_email) AS email FROM admin_audit a LEFT JOIN admin_users u ON u.id=a.admin_id WHERE a.admin_id=$1 ORDER BY a.seq DESC LIMIT 100',[c.get('admin').id])]);
     return render(c,'操作记录','activity',activityPage(events.rows,audits.rows));
   });
   app.get('/test', async c => {
-    const connectors = await service.connectorStore.list();
+    const connectors = await store(c).list();
     const selected = z.enum(connectorNames).optional().parse(c.req.query('connector')) || connectors.find(p=>p.enabled)?.name || 'notion';
     return render(c,'连接测试','test',testPage(connectors, selected));
   });

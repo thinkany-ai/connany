@@ -10,7 +10,7 @@ test('GitHub OAuth without installations returns to agent or completion page, ne
     initialize:async()=>{},runtime:{config:{publicBaseUrl:'http://localhost:3000'}},
     findCallback:async()=>({id:'session',connector:'github',return_url:returnUrl}),
     finish:async()=>({errorCode:null,connection:{identity:{needs_installation:true}}}),
-    connectorStore:{resolve:async()=>({installUrl:()=> 'https://github.com/apps/original/installations/new'})}
+    connectorStore:{in(){return this},resolve:async()=>({installUrl:()=> 'https://github.com/apps/original/installations/new'})}
   } as unknown as Service;
   const app=createApp(service);
   const request=()=>app.request('http://localhost:3000/oauth/github/callback?state='+'a'.repeat(43)+'&code=code');
@@ -59,7 +59,7 @@ test('failed authorization also returns to the agent when return_url is set',asy
     initialize:async()=>{},runtime:{config:{publicBaseUrl:'http://localhost:3000'}},
     findCallback:async()=>({id:'session',connector:'notion',return_url:returnUrl}),
     finish:async()=>({errorCode:'access_denied'}),
-    connectorStore:{resolve:async()=>({})}
+    connectorStore:{in(){return this},resolve:async()=>({})}
   } as unknown as Service;
   const app=createApp(service);
   const request=()=>app.request('http://localhost:3000/oauth/notion/callback?state='+'a'.repeat(43)+'&error=access_denied');
@@ -67,4 +67,25 @@ test('failed authorization also returns to the agent when return_url is set',asy
   assert.equal(response.headers.get('location'),'https://agent.example/done?connany_session_id=session&connany_status=error&connany_error=access_denied');
   returnUrl=null;
   const hosted=await request();assert.equal(hosted.status,400);assert((await hosted.text()).includes('连接未完成'));
+});
+
+test('listing access after the App is installed clears needs_access on the connection',async()=>{
+  const updates:any[]=[];
+  const service=Object.create(Service.prototype) as Service;
+  const identity={account_name:'octocat',needs_installation:true,installation_count:0};
+  service.getConnection=async()=>({id:'conn',connector:'github',connector_app_id:'app',identity} as any);
+  service.execute=async()=>({total_count:1,installations:[{id:7,account:{login:'acme',type:'Organization'},repository_selection:'selected',html_url:'https://github.com/organizations/acme/settings/installations/7'}]});
+  (service as any).connectorStore={resolve:async()=>({installUrl:()=> 'https://github.com/apps/demo/installations/new'})};
+  (service as any).pool={query:async(sql:string,params:unknown[])=>{updates.push({sql,params});return {rows:[]};}};
+  const access=await service.listAccess('project','owner','conn');
+  assert.equal(access.total,1);
+  assert.equal(updates.length,1);
+  assert.match(updates[0].sql,/UPDATE connections SET identity/);
+  const saved=JSON.parse(String(updates[0].params[0]));
+  assert.equal(saved.needs_installation,false);
+  assert.equal(publicConnection({...identity,connector:'github',identity:saved} as any).needs_access,false);
+  updates.length=0;
+  service.getConnection=async()=>({id:'conn',connector:'github',connector_app_id:'app',identity:saved} as any);
+  await service.listAccess('project','owner','conn');
+  assert.equal(updates.length,0);
 });

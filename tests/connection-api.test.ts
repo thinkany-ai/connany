@@ -34,7 +34,7 @@ test('exact catalog tool is found beyond the first twenty related descriptions a
  let executed=false;
  const tools=Array.from({length:30},(_,i)=>({name:`github.a${i}`,connector:'github',description:'Related to github.target',read_only:true,input_schema:{},required_permissions:[]}));
  tools.push({...tools[0],name:'github.target',description:'Target'});
- const app=createApp({initialize:async()=>{},authenticate:async()=>({id:'project'}),connectorStore:{catalog:async()=>tools},getConnection:async(_p:string,_u:string,c:string)=>({id:c,connector:'github',status:'connected'}),execute:async(p:string,u:string,c:string,a:string)=>{
+ const app=createApp({initialize:async()=>{},authenticate:async()=>({id:'project'}),connectorStore:{in(){return this},catalog:async()=>tools},getConnection:async(_p:string,_u:string,c:string)=>({id:c,connector:'github',status:'connected'}),execute:async(p:string,u:string,c:string,a:string)=>{
   assert.deepEqual([p,u,c],['project','alice','conn']);
   assert.equal(a,'github.target');executed=true;return {ok:true};
  }} as unknown as Service);
@@ -50,14 +50,14 @@ test('connection filter validation rejects unknown runtime and statuses before d
  assert.equal(queries,0);
 });
 
-test('connectors list only enabled connectors with title and public avatar',async()=>{
- const app=createApp({initialize:async()=>{},authenticate:async()=>({id:'project'}),runtime:{config:{publicBaseUrl:'https://connany.example'}},connectorStore:{list:async()=>[
+test('connectors list only enabled connectors with title, description and public avatar',async()=>{
+ const app=createApp({initialize:async()=>{},authenticate:async()=>({id:'project'}),runtime:{config:{publicBaseUrl:'https://connany.example'}},connectorStore:{in(){return this},list:async()=>[
   {name:'notion',enabled:true},{name:'github',enabled:true,installation_url:'https://github.com/apps/demo/installations/new'},{name:'linear',enabled:false},
  ]}} as unknown as Service);
  const body=await (await app.request('/v1/connectors')).json() as any;
  assert.deepEqual(body.data,[
-  {name:'notion',title:'Notion',avatar_url:'https://connany.example/connectors/notion/avatar.svg'},
-  {name:'github',title:'GitHub',avatar_url:'https://connany.example/connectors/github/avatar.svg'},
+  {name:'notion',title:'Notion',description:'页面、数据库与工作区搜索',avatar_url:'https://connany.example/connectors/notion/avatar.svg'},
+  {name:'github',title:'GitHub',description:'仓库、Issue 与 Pull Request',avatar_url:'https://connany.example/connectors/github/avatar.svg'},
  ]);
  const avatar=await app.request('/connectors/linear/avatar.svg');
  assert.equal(avatar.status,200);assert.equal(avatar.headers.get('Content-Type'),'image/svg+xml');assert((await avatar.text()).startsWith('<svg'));
