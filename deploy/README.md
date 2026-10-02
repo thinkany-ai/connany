@@ -66,12 +66,21 @@ docker run -d --name connany --restart unless-stopped --init \
 
 ### 1. 准备镜像和数据库
 
-准备 PostgreSQL 15+ 和容器仓库。模板中的 `ghcr.io/thinkany-ai/connany:main` 是目标镜像名，**不假定镜像已发布**。先登录有推送权限的仓库，再自行构建发布；生产建议使用固定版本标签或 digest。
+准备 PostgreSQL 15+。GitHub Actions 在测试通过后自动构建镜像并推送到 GHCR（amd64 + arm64）：
+
+| 触发 | 镜像标签 |
+| --- | --- |
+| 推送到 `main` | `ghcr.io/thinkany-ai/connany:main`、`:sha-<完整提交号>` |
+| 推送版本标签 `v1.2.3` | `:1.2.3`、`:1.2`、`:latest`、`:sha-<完整提交号>` |
+
+`main` 标签会随每次推送变化；生产建议使用版本标签、`sha-` 标签或 digest。仓库为私有时镜像也是私有的，拉取前需要用有 `read:packages` 权限的 GitHub Token 登录 `ghcr.io`（集群中配置 imagePullSecret）。
+
+也可以自行构建推送到你的镜像仓库：
 
 ```bash
-# 修改成你有权限的镜像地址；platform 应与集群节点架构一致。
+# platform 应与集群节点架构一致。
 docker buildx build --platform linux/amd64 \
-  -t ghcr.io/thinkany-ai/connany:main --push .
+  -t <你的镜像地址>:<标签> --push .
 ```
 
 将 `deploy/k8s/connany.yaml` 中 **initContainer 与应用容器两处镜像**改为同一版本。修改 `PUBLIC_BASE_URL`；修改 `ingress.yaml` 中两处域名、Ingress class 与 TLS 配置。模板假设已有 nginx Ingress controller 和名为 `letsencrypt-prod` 的 cert-manager ClusterIssuer；其他网关需使用相应配置。已有证书时删掉 cert-manager annotation，将 TLS Secret 改成你的证书。

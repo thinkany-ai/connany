@@ -116,7 +116,7 @@ Response example:
 | error | Stop polling, show error_code and offer another connection attempt |
 | expired | Stop polling and create a new session |
 
-On success, return_url receives connany_session_id through an automatic redirect. Failures show a hosted error page. A redirect is not proof of success: query the session from your backend under the authenticated user. Complete authorization in the same browser so callback cookies are preserved.
+With a return_url, the browser is redirected there with connany_session_id when authorization ends; failures also add connany_status=error and connany_error (such as access_denied). Without a return_url, a hosted completion or error page is shown. A redirect is not proof of success: query the session from your backend under the authenticated user. Complete authorization in the same browser so callback cookies are preserved.
 
 ## List and retrieve connections
 

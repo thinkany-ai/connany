@@ -52,3 +52,19 @@ test('connectors without a post-authorization access step report no access work'
   assert.equal(publicConnection({...base,connector:'github',identity:{needs_installation:true}} as any).needs_access,true);
   assert.equal(publicConnection({...base,connector:'github',identity:{needs_installation:false}} as any).needs_access,false);
 });
+
+test('failed authorization also returns to the agent when return_url is set',async()=>{
+  let returnUrl:string|null='https://agent.example/done';
+  const service={
+    initialize:async()=>{},runtime:{config:{publicBaseUrl:'http://localhost:3000'}},
+    findCallback:async()=>({id:'session',connector:'notion',return_url:returnUrl}),
+    finish:async()=>({errorCode:'access_denied'}),
+    connectorStore:{resolve:async()=>({})}
+  } as unknown as Service;
+  const app=createApp(service);
+  const request=()=>app.request('http://localhost:3000/oauth/notion/callback?state='+'a'.repeat(43)+'&error=access_denied');
+  const response=await request();assert.equal(response.status,302);
+  assert.equal(response.headers.get('location'),'https://agent.example/done?connany_session_id=session&connany_status=error&connany_error=access_denied');
+  returnUrl=null;
+  const hosted=await request();assert.equal(hosted.status,400);assert((await hosted.text()).includes('连接未完成'));
+});

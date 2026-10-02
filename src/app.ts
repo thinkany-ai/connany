@@ -183,12 +183,16 @@ export function createApp(service: Service) {
     deleteCookie(c, `connany_${s.id}`, { path: `/oauth/${connector}/callback`, secure: service.runtime.config.publicBaseUrl.startsWith('https:') });
     if (s.purpose === 'tool_sync') return c.html(toolSyncPage(s.connector, result.errorCode, result.toolCount ?? 0), result.errorCode ? 400 : 200);
     const runtime = await service.connectorStore.resolve(s.connector, s.connector_app_id);
-    if (!result.errorCode) {
-      if (s.return_url) {
-        const returnUrl = new URL(s.return_url);
-        returnUrl.searchParams.set('connany_session_id', s.id);
-        return c.redirect(returnUrl.toString(), 302);
+    // With a return_url the agent shows the outcome, including failures, so users
+    // stay in its own UI. The query only hints the outcome; the agent confirms it.
+    if (s.return_url) {
+      const returnUrl = new URL(s.return_url);
+      returnUrl.searchParams.set('connany_session_id', s.id);
+      if (result.errorCode) {
+        returnUrl.searchParams.set('connany_status', 'error');
+        returnUrl.searchParams.set('connany_error', result.errorCode);
       }
+      return c.redirect(returnUrl.toString(), 302);
     }
     const access = connectorSpec(s.connector).access;
     const pending = access && result.connection && access.needsAccess(result.connection.identity) ? { label: access.label, url: access.addUrl(runtime) } : null;

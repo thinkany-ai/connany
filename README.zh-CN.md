@@ -91,12 +91,12 @@ docker compose --env-file deploy/docker/.env -f deploy/docker/compose.yaml exec 
 
 `deploy/k8s/` 提供 Namespace、Deployment（含迁移 initContainer）、Service 和 HTTPS Ingress 模板。使用外部 PostgreSQL，凭证通过 Secret 注入。
 
-1. 构建并推送镜像，修改模板的镜像、域名与 Ingress/TLS 配置。
+1. 使用 GitHub Actions 发布到 `ghcr.io/thinkany-ai/connany` 的镜像（或自行构建），修改模板的镜像标签、域名与 Ingress/TLS 配置。
 2. 创建命名空间和 `connany-runtime` Secret。
 3. 应用 Deployment/Service，等待迁移和 rollout 完成。
 4. 创建管理员后应用 Ingress。
 
-完整命令、私有镜像、升级及故障排查见 [Kubernetes 部署说明](deploy/README.md#kubernetes)。模板镜像地址不代表镜像已发布。
+完整命令、私有镜像、升级及故障排查见 [Kubernetes 部署说明](deploy/README.md#kubernetes)。
 
 ## 环境变量
 
@@ -121,7 +121,7 @@ npx playwright install chromium
 TEST_DATABASE_URL='postgres://connany:connany@localhost:54329/connany' npm run test:browser
 ```
 
-浏览器测试使用模拟平台，不能替代真实账号授权验证。GitHub Actions 执行类型检查、构建、单元、集成和浏览器测试。
+浏览器测试使用模拟平台，不能替代真实账号授权验证。GitHub Actions 执行类型检查、构建、单元、集成和浏览器测试；`main` 分支和 `v*` 标签测试通过后会构建多架构镜像并推送到 GHCR。
 
 ```text
 src/          Hono 服务、授权流程、连接器和管理后台

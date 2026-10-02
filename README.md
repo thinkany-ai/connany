@@ -90,12 +90,12 @@ Once the database is healthy, migrations run before the application starts. The 
 
 `deploy/k8s/` contains templates for a Namespace, Deployment with a migration init container, Service, and HTTPS Ingress. It uses an external PostgreSQL database and injects credentials through a Secret.
 
-1. Build and push an image, then update the image references, domain, and Ingress/TLS configuration in the templates.
+1. Use the image GitHub Actions publishes to `ghcr.io/thinkany-ai/connany` (or build your own), then update the image tag, domain, and Ingress/TLS configuration in the templates.
 2. Create the namespace and the `connany-runtime` Secret.
 3. Apply the Deployment and Service, and wait for migrations and rollout to complete.
 4. Create an administrator, then apply the Ingress.
 
-See the [Kubernetes deployment guide (Chinese)](deploy/README.md#kubernetes) for full commands, private registries, upgrades, and troubleshooting. The image address in the templates does not imply that an image has been published.
+See the [Kubernetes deployment guide (Chinese)](deploy/README.md#kubernetes) for full commands, private registries, upgrades, and troubleshooting.
 
 ## Environment variables
 
@@ -120,7 +120,7 @@ npx playwright install chromium
 TEST_DATABASE_URL='postgres://connany:connany@localhost:54329/connany' npm run test:browser
 ```
 
-Browser tests use simulated upstream services and do not replace authorization testing with real accounts. GitHub Actions runs type checks, builds, unit tests, integration tests, and browser tests.
+Browser tests use simulated upstream services and do not replace authorization testing with real accounts. GitHub Actions runs type checks, builds, unit tests, integration tests, and browser tests, then publishes a multi-arch image to GHCR for `main` and `v*` tags.
 
 ```text
 src/          Hono service, authorization flows, connectors, and admin console

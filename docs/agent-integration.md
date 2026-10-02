@@ -105,7 +105,7 @@ const result = await connany.getSession('notion', session.id, currentUser.id);
 对应 `GET /v1/connectors/{name}/sessions/{id}?external_user_id=…`。确认方式有两种：
 
 - **轮询**：用户打开链接后，后端每 5 秒查询一次，直到结果不再是进行中。适合对话场景：轮询期间在对话里显示「等待授权…」，成功后继续回答用户。
-- **回跳**：设置了 `return_url` 时，成功后浏览器会带着 `connany_session_id` 跳回。后端先确认这个会话属于当前登录用户，再用上面的接口查询一次。`connany_session_id` 来自浏览器，不能直接信任。
+- **回跳**：设置了 `return_url` 时，授权结束后浏览器会带着 `connany_session_id` 跳回；失败时另带 `connany_status=error` 和 `connany_error`，方便在自己的页面展示结果。后端先确认这个会话属于当前登录用户，再用上面的接口查询一次。`connany_session_id` 来自浏览器，不能直接信任。
 
 | status | 处理 |
 | --- | --- |

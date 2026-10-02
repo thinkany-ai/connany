@@ -116,7 +116,7 @@ curl "$CONNANY_BASE_URL/v1/connectors/notion/sessions/cs_example?external_user_i
 | error | 停止轮询，展示 error_code，提供重新连接入口 |
 | expired | 停止轮询，创建新会话 |
 
-授权成功时，如果设置了 return_url，会自动跳转并附带 connany_session_id。失败时显示托管错误页。浏览器跳转不是成功凭证，后端仍需按当前用户查询会话确认。用户应在同一浏览器完成流程，回调需保留授权时的 Cookie。
+设置了 return_url 时，授权结束后会自动跳转并附带 connany_session_id；失败时还会附带 connany_status=error 和 connany_error（如 access_denied）。未设置时显示托管完成页或错误页。浏览器跳转不是成功凭证，后端仍需按当前用户查询会话确认。用户应在同一浏览器完成流程，回调需保留授权时的 Cookie。
 
 ## 查询用户连接
 
