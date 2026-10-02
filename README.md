@@ -1,23 +1,25 @@
 <p align="center"><img src="public/brand/logo.svg" width="80" alt="Connany logo"></p>
 <h1 align="center">Connany</h1>
-<p align="center">连接 Agent 与用户的工具、账号和工作空间。</p>
+<p align="center">Connect agents to your users’ tools, accounts, and workspaces.</p>
+<p align="center"><a href="README.md">English</a> · <a href="README.zh-CN.md">简体中文</a></p>
 
-Connany 是面向 Agent 产品的开源多租户连接器服务。统一管理用户授权、连接和凭证，Agent 后端通过 REST API 或 TypeScript SDK 发现工具、操作已授权数据，无需接触平台 token。
+Connany is an open-source, multi-tenant connector service for agent applications. It manages user authorization, connections, and credentials so your agent backend can list tools and work with authorized data through a REST API or TypeScript SDK, without handling provider tokens.
 
-支持 **Notion MCP、GitHub App + MCP、Linear MCP**。MCP 是上游接入方式；Connany 当前对 Agent 提供 REST API 和 SDK，不是通用 MCP Server 托管平台。
+It supports **Notion MCP, GitHub App + MCP, and Linear MCP**. MCP is used to connect to upstream services; Connany exposes a REST API and SDK to agents, rather than hosting general-purpose MCP servers.
 
-## 功能
+## Features
 
-- 管理后台：连接器配置、API Key 创建/停用/轮换、用户连接及操作记录。
-- 用户授权：托管 OAuth 页面、一次性 state、浏览器绑定、GitHub/Linear PKCE。
-- 多租户隔离：按 API Key 所属项目和 `external_user_id` 校验用户数据归属。
-- 连接管理：多账号和工作区、查询、主动检查、重连、断开及上游撤销重试。
-- 工具发现与调用：动态搜索官方 MCP 工具、参数 schema 和读写标记；SDK 可仅向模型暴露 `discover_actions` / `execute_action` 两个工具。
-- 凭证保护：AES-256-GCM 加密平台凭证、API Key 仅保存哈希、事务锁协调刷新和调用。
+- **Admin console:** configure connectors once and sync their tool catalogs, create a project for each agent, manage each project's API keys (zero-downtime rotation), inspect user connections and activity, and read the API docs and agent integration guide.
+- **User authorization:** hosted OAuth pages, single-use state, browser binding, and PKCE for GitHub and Linear.
+- **Project isolation:** every API key belongs to a project; user data is scoped to `project_id + external_user_id`.
+- **Connection management:** multiple accounts and workspaces, listing, active checks, reconnection, disconnection, and upstream revocation retries.
+- **Tool listing and calls:** list the official MCP tools a user's connection can use with `GET /v1/connections/{id}/tools` (or browse each connector's catalog with `GET /v1/tools`), inspect parameter schemas and read/write metadata, and call them with `POST /v1/connections/{id}/tools/{name}/call`. The SDK can expose just two tools to a model: `list_tools` and `call_tool`.
+- **Event feed:** one project-wide feed (`GET /v1/events`) reports connections, reauthorization needs, disconnections, and tool calls for every user.
+- **Credential protection:** AES-256-GCM encryption for connector and user credentials, hashed API keys, and database transaction locks to coordinate token refresh and execution.
 
-## 快速开始
+## Quick start
 
-需要 Node.js 22+、npm、PostgreSQL 15+。以下使用 Docker 启动本地数据库：
+Requires Node.js 22+, npm, and PostgreSQL 15+. The following uses Docker to start a local database:
 
 ```bash
 git clone git@github.com:thinkany-ai/connany.git
@@ -27,120 +29,120 @@ npm run setup
 docker compose up -d postgres
 npm run db:migrate
 npm run admin:create -- admin@example.com
-npm run dev
+npm run dev   # or: make dev
 ```
 
-管理员密码交互输入，至少 12 位。`npm run setup` 生成 `.env` 和随机加密密钥，不覆盖已有文件。根目录 `compose.yaml` 仅启动本地 PostgreSQL，默认密码仅供开发。
+Enter an administrator password of at least 12 characters when prompted. `npm run setup` creates `.env` with a random encryption key without overwriting an existing file. The root `compose.yaml` starts only PostgreSQL; its default password is for local development.
 
-- 管理后台：<http://localhost:3000/admin>
-- 公开 API 文档：<http://localhost:3000/docs>，支持中英文、代码复制、Markdown 和 SDK 下载。
-- 健康检查：<http://localhost:3000/health>
+- Admin console: <http://localhost:3000/admin>; **Docs** in the sidebar holds the API docs and the agent integration guide.
+- Public API docs: <http://localhost:3000/docs>, with English and Chinese content, copyable examples, and Markdown/SDK downloads.
+- Health check: <http://localhost:3000/health>
 
-已有数据库时直接配置 `.env` 的 `DATABASE_URL`，跳过 Docker 步骤。端口占用时同时修改 `PORT` 和 `PUBLIC_BASE_URL`。日常开发运行 `npm run dev`，服务端修改自动重启，静态页面资源刷新即可。
+To use an existing database, set `DATABASE_URL` in `.env` and skip the Docker step. If the port is occupied, update both `PORT` and `PUBLIC_BASE_URL`. For daily development, run `make dev`: it installs dependencies when the lockfile changes, starts PostgreSQL, applies migrations, and runs the server with hot reload (Docker is only used when `DATABASE_URL` points to the compose database on port 54329). Server changes restart the process, while static asset changes need a browser refresh.
 
-## 配置连接器
+## Configure connectors
 
-| 连接器 | 配置方式 | 能力 |
+| Connector | Setup | Capabilities |
 | --- | --- | --- |
-| Notion | 后台一键启用官方 MCP，自动注册 OAuth 客户端 | 页面、数据库、工作区搜索 |
-| GitHub | 后台配置 GitHub App 的 Client ID、Client Secret、App slug | 仓库、Issue、Pull Request 等官方 MCP 工具 |
-| Linear | 后台一键启用官方 MCP，自动注册 OAuth 客户端 | Issue、项目、团队协作 |
+| Notion | Enable official MCP in the console; OAuth client registration is automatic | Pages, databases, and workspace search |
+| GitHub | Configure a GitHub App’s Client ID, Client Secret, and App slug in the console | Repositories, issues, pull requests, and other official MCP tools |
+| Linear | Enable official MCP in the console; OAuth client registration is automatic | Issues, projects, and team collaboration |
 
-用户仍需授权自己的账号；GitHub 仓库访问还需要安装 App 并选择仓库。详见 [连接器配置](docs/provider-setup.md)。
+After enabling a connector, click **Sync tool catalog** on its card once: upstream MCP servers list tools only to signed-in users, so you authorize with your own account and Connany keeps only the tool definitions. Users must still authorize their own accounts. GitHub repository access also requires installing the App and selecting repositories. See the [connector setup guide (Chinese)](docs/connector-setup.md).
 
-## Agent 接入
+## Integrate your agent
 
-1. 在后台「API Keys」创建并保存密钥，登记授权返回地址。
-2. 将服务地址和 API Key 配置到 Agent 后端。
-3. 为用户创建连接会话，引导用户在托管页面完成授权。
-4. 按用户和连接发现工具、执行调用。
+1. Create a project for your agent under **Projects** in the console and save its API key.
+2. Configure the service URL and API key in your agent backend.
+3. Create an authorization session for a user (`POST /v1/connectors/{name}/sessions`) and direct them to the hosted authorization page.
+4. In conversations, give the model the tools of the user's connections and call them through those connections. If a needed connector is not connected yet, show an authorization button in the conversation.
 
-可直接复制无依赖的 [TypeScript SDK](sdk/client.ts)，或运行示例：
+Copy the dependency-free [TypeScript SDK](sdk/client.ts), or run the example:
 
 ```bash
 export CONNANY_API_KEY='cn_live_replace_with_your_key'
 npm run example:agent -- notion
-# 也可选择 github / linear
+# Also supports github / linear.
 ```
 
-API Key 仅放在后端。SDK 两工具适配器默认只读，写操作由后端显式设置 `allowWrites: true`；上游最终权限由用户授权和平台决定。
+Keep API keys on the backend. The SDK’s two-tool adapter defaults to read-only access; your backend must explicitly set `allowWrites: true` to enable writes. Actual upstream access depends on the user’s authorization and provider permissions.
 
-- [Agent 接入指南](docs/agent-integration.md)
-- [REST API 文档](docs/api.md) · [English API reference](docs/api.en.md)
-- [管理后台说明](docs/admin.md)
+- [Agent integration guide (Chinese)](docs/agent-integration.md)
+- [REST API reference](docs/api.en.md) · [中文 API 文档](docs/api.md)
+- [Admin console guide (Chinese)](docs/admin.md)
 
-## Docker 部署
+## Docker deployment
 
-仓库包含完整应用与 PostgreSQL 的 Compose 配置：
+The repository includes a Compose configuration for the application and PostgreSQL:
 
 ```bash
 cp deploy/docker/.env.example deploy/docker/.env
-# 编辑 .env：填入 POSTGRES_PASSWORD、TOKEN_ENCRYPTION_KEY 和公开域名。
-# 分别可用 openssl rand -hex 24 和 openssl rand -base64 32 生成密码/密钥。
+# Edit .env: set POSTGRES_PASSWORD, TOKEN_ENCRYPTION_KEY, and the public origin.
+# Generate the password with openssl rand -hex 24 and the key with openssl rand -base64 32.
 docker compose --env-file deploy/docker/.env -f deploy/docker/compose.yaml up -d --build
 docker compose --env-file deploy/docker/.env -f deploy/docker/compose.yaml exec app \
   node dist/scripts/create-admin.js admin@example.com
 ```
 
-数据库健康后自动执行迁移，再启动应用。应用仅绑定本机端口；生产需配置 HTTPS 反向代理。具体环境变量、外部数据库、升级与备份见 [Docker 部署说明](deploy/README.md#docker-compose)。
+Once the database is healthy, migrations run before the application starts. The application binds to a loopback port; production deployments need an HTTPS reverse proxy. See the [Docker deployment guide (Chinese)](deploy/README.md#docker-compose) for environment variables, external databases, upgrades, and backups.
 
-## Kubernetes 部署
+## Kubernetes deployment
 
-`deploy/k8s/` 提供 Namespace、Deployment（含迁移 initContainer）、Service 和 HTTPS Ingress 模板。使用外部 PostgreSQL，凭证通过 Secret 注入。
+`deploy/k8s/` contains templates for a Namespace, Deployment with a migration init container, Service, and HTTPS Ingress. It uses an external PostgreSQL database and injects credentials through a Secret.
 
-1. 构建并推送镜像，修改模板的镜像、域名与 Ingress/TLS 配置。
-2. 创建命名空间和 `connany-runtime` Secret。
-3. 应用 Deployment/Service，等待迁移和 rollout 完成。
-4. 创建管理员后应用 Ingress。
+1. Build and push an image, then update the image references, domain, and Ingress/TLS configuration in the templates.
+2. Create the namespace and the `connany-runtime` Secret.
+3. Apply the Deployment and Service, and wait for migrations and rollout to complete.
+4. Create an administrator, then apply the Ingress.
 
-完整命令、私有镜像、升级及故障排查见 [Kubernetes 部署说明](deploy/README.md#kubernetes)。模板镜像地址不代表镜像已发布。
+See the [Kubernetes deployment guide (Chinese)](deploy/README.md#kubernetes) for full commands, private registries, upgrades, and troubleshooting. The image address in the templates does not imply that an image has been published.
 
-## 环境变量
+## Environment variables
 
-| 变量 | 含义 |
+| Variable | Description |
 | --- | --- |
-| `DATABASE_URL` | PostgreSQL 连接串；生产按数据库要求配置 TLS |
-| `PUBLIC_BASE_URL` | 公开 HTTPS origin，无路径；仅 localhost / 127.0.0.1 允许 HTTP |
-| `TOKEN_ENCRYPTION_KEY` | 32 字节随机值的 base64 编码；必须备份并跨重启保持稳定 |
-| `PORT` | 监听端口，默认 3000 |
+| `DATABASE_URL` | PostgreSQL connection string; configure TLS as required by your production database |
+| `PUBLIC_BASE_URL` | Public HTTPS origin without a path; HTTP is allowed only for localhost / 127.0.0.1 |
+| `TOKEN_ENCRYPTION_KEY` | 32 random bytes encoded as base64; back it up and keep it stable across restarts |
+| `PORT` | Listening port; defaults to 3000 |
 
-平台凭证在后台配置；`.env.example` 中 GitHub 相关变量仅用于兼容旧版的一次性导入。
+Configure connector credentials in the console. The GitHub variables in `.env.example` support a one-time import for compatibility with older configurations.
 
-## 开发与验证
+## Development and validation
 
 ```bash
 npm run typecheck
 npm test
 npm run build
-# 在独立随机 schema 内测试，结束后清理；建议使用专用测试数据库。
+# Tests use isolated random schemas and clean them up afterward. A dedicated test database is recommended.
 TEST_DATABASE_URL='postgres://connany:connany@localhost:54329/connany' npm run test:integration
 npx playwright install chromium
 TEST_DATABASE_URL='postgres://connany:connany@localhost:54329/connany' npm run test:browser
 ```
 
-浏览器测试使用模拟平台，不能替代真实账号授权验证。GitHub Actions 执行类型检查、构建、单元、集成和浏览器测试。
+Browser tests use simulated upstream services and do not replace authorization testing with real accounts. GitHub Actions runs type checks, builds, unit tests, integration tests, and browser tests.
 
 ```text
-src/          Hono 服务、授权流程、连接器和管理后台
-public/       管理后台、API 文档与品牌资源
-sdk/          无依赖 TypeScript 服务端 SDK
-migrations/   PostgreSQL 迁移
-scripts/      环境初始化、迁移和管理员命令
-examples/     Agent 接入示例
-deploy/       Docker Compose 与 Kubernetes 部署模板
-docs/         接入、配置和运行文档
-tests/        单元、集成及浏览器测试
+src/          Hono service, authorization flows, connectors, and admin console
+public/       Admin console assets, API docs assets, and branding
+sdk/          Dependency-free TypeScript backend SDK
+migrations/   PostgreSQL migrations
+scripts/      Environment setup, migrations, and administrator commands
+examples/     Agent integration examples
+deploy/       Docker Compose and Kubernetes deployment templates
+docs/         Integration, configuration, and operations documentation
+tests/        Unit, integration, and browser tests
 ```
 
-## 当前边界
+## Current limitations
 
-- 平台配置由多个项目共享；平台侧授权可能复用，项目内隔离不等于独立的上游 OAuth grant。
-- 当前使用 REST/SDK 和事件轮询，尚无对 Agent 的 MCP 服务端、推送 webhook 或按项目自带 OAuth 应用。
-- 无自动凭证主密钥轮换、审计数据清理或上游撤销重试 worker。
-- 公开部署需自行配置 HTTPS、数据库备份和入口限流。
+- Connector configuration is shared across projects, and upstream authorization may be reused. Project isolation does not imply separate upstream OAuth grants.
+- The current interfaces are REST/SDK and event polling. There is no agent-facing MCP server, push webhook delivery, or per-project/per-workspace OAuth app configuration yet. The database already has a `workspaces` table with a single default workspace.
+- There is no automatic credential master-key rotation, audit retention cleanup, or background worker for upstream revocation retries.
+- Public deployments must configure HTTPS, database backups, and ingress rate limiting.
 
-详见 [架构、运维与限制](docs/operations.md)。欢迎通过 Issue 和 Pull Request 参与改进。
+See [architecture, operations, and limitations (Chinese)](docs/operations.md). Issues and pull requests are welcome.
 
 ## License
 
-代码采用 [MIT License](LICENSE)。第三方名称和品牌资产归各自所有者所有，不因本项目 MIT 协议授予商标权；见 [第三方声明](THIRD_PARTY_NOTICES.md)。
+The code is licensed under the [MIT License](LICENSE). Third-party names and brand assets belong to their respective owners; the MIT license does not grant trademark rights. See [third-party notices](THIRD_PARTY_NOTICES.md).

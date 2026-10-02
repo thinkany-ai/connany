@@ -17,8 +17,8 @@ test('SDK will not send project keys over insecure remote HTTP', () => {
 test('SDK supports filtered connection pagination, legacy cursors and explicit checks',async()=>{
  const calls:{url:URL;init?:RequestInit}[]=[];
  const sdk=new Connany({baseUrl:'https://connany.example',apiKey:'secret',fetch:async(url,init)=>{calls.push({url:new URL(String(url)),init});return Response.json({});}});
- await sdk.listConnections('alice',{provider:'notion',status:'connected',limit:10,after:'conn/1'});
- assert.deepEqual(Object.fromEntries(calls[0].url.searchParams),{external_user_id:'alice',provider:'notion',status:'connected',limit:'10',after:'conn/1'});
+ await sdk.listConnections('alice',{connector:'notion',status:'connected',limit:10,after:'conn/1'});
+ assert.deepEqual(Object.fromEntries(calls[0].url.searchParams),{external_user_id:'alice',connector:'notion',status:'connected',limit:'10',after:'conn/1'});
  await sdk.listConnections('alice','legacy');assert.equal(calls[1].url.searchParams.get('after'),'legacy');
  await sdk.checkConnection('conn/1','alice');assert.equal(calls[2].url.pathname,'/v1/connections/conn%2F1/check');
  assert.equal(calls[2].init?.method,'POST');assert.deepEqual(JSON.parse(String(calls[2].init?.body)),{external_user_id:'alice'});

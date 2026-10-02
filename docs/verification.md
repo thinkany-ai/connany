@@ -25,8 +25,8 @@
 - `npm run typecheck`：通过。
 - `npm run build`：通过。
 - `npm test`：8 项通过，包含加密、平台协议、SDK 和管理员密码哈希。
-- `npm run test:integration`：16 项通过，使用独立 PostgreSQL 15 实例；覆盖三个平台授权、跨项目/用户隔离、回调重放、并发刷新、撤销、管理员登录、CSRF、凭证加密、热更新、旧应用归属、密钥轮换、项目停用和密码重置。
-- `npm run test:browser`：2 项通过，在真实 Chrome 中验证三个平台 OAuth 浏览器流程，以及后台登录、保存三个连接器配置、创建两个 agent 项目、用生成的 key 完成一次 OAuth、轮换/停用、退出和 390px 手机布局。
+- `npm run test:integration`：18 项通过，使用独立 PostgreSQL 15 实例；覆盖三个平台授权、跨项目/用户隔离、回调重放、并发刷新、撤销、管理员登录、CSRF、凭证加密、热更新、旧应用归属、API Key 平滑轮换与吊销、项目停用和密码重置。
+- `npm run test:browser`：2 项通过，在真实 Chrome 中验证三个平台 OAuth 浏览器流程，以及后台登录、保存三个连接器配置、创建两个 agent 项目、用生成的 key 完成一次 OAuth、新建/吊销 API Key、停用与删除项目、退出和 390px 手机布局。
 - 编译产物启动检查：数据库迁移、管理员 CLI（stdin 密码）、登录、创建项目 key、agent API、静态资源、文档及 SDK 下载通过。
 - 数据库迁移重复执行通过，旧项目表和 key 结构保持兼容。
 

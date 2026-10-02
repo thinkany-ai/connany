@@ -12,4 +12,7 @@ export const returnUrlSchema = z.string().url().max(2048).refine(value => {
   return url.protocol !== 'http:' || loopback.has(url.hostname);
 }, '返回地址需为 HTTPS、本机 HTTP 或应用自定义协议，不能含用户名、密码或 fragment。');
 export const projectInput = z.object({ name: z.string().trim().min(1).max(100), return_urls: z.array(returnUrlSchema).max(20).optional() }).strict();
-export const publicProjectColumns = 'id,name,enabled,key_prefix,key_created_at,return_urls,created_at,updated_at';
+export const publicProjectColumns = 'id,workspace_id,name,enabled,return_urls,created_at,updated_at';
+export const publicApiKeyColumns = 'id,project_id,name,key_prefix,created_at,last_used_at,revoked_at';
+/** Two active keys allow rotation without downtime: issue a new key, deploy it, revoke the old one. */
+export const maxActiveApiKeys = 2;

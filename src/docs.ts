@@ -1,9 +1,13 @@
 import {readFile} from 'node:fs/promises';
 import {brandMark, faviconLink} from './brand.js';
 const escape = (value:string) => value.replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]!));
-const inline = (value:string) => escape(value).replace(/`([^`]+)`/g,'<code>$1</code>');
-/** Small, escaped renderer for the documented subset: headings, paragraphs, tables and fences. */
-export function renderDocs(markdown:string, language = 'en') {
+/** Inline code, bold and http(s) links. Everything is escaped first; code spans are left unformatted. */
+const inline = (value:string) => value.split(/(`[^`]+`)/).map(part => part.length > 1 && part.startsWith('`') && part.endsWith('`') ? `<code>${escape(part.slice(1,-1))}</code>` :
+  escape(part).replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>').replace(/\[([^\]]+)\]\(([^)\s]+)\)/g,(_,text:string,url:string)=>/^https?:\/\//.test(url)?`<a href="${url}" target="_blank" rel="noopener noreferrer">${text}</a>`:text)).join('');
+const listItem = /^(\s*)(?:[-*]|\d+\.)\s+(?:\[[ x]\]\s+)?(.*)$/;
+const formatCode = (lang:string, code:string) => { if(lang!=='json')return code; try { return JSON.stringify(JSON.parse(code),null,2); } catch { return code; } };
+/** Small, escaped renderer for the documented subset: headings, paragraphs, lists, tables and fences. */
+export function renderDocs(markdown:string, language = 'en', idPrefix = 'section') {
   const lines=markdown.split('\n'); const nav:{id:string;title:string}[]=[];const html:string[]=[];
   let section=false;
   for(let i=0;i<lines.length;i++) {
@@ -11,13 +15,19 @@ export function renderDocs(markdown:string, language = 'en') {
     if(line.startsWith('# '))continue;
     if(line.startsWith('## ')) {
       if(section)html.push('</section>');section=true;
-      const title=line.slice(3),id=`section-${nav.length+1}`;nav.push({id,title});
+      const title=line.slice(3),id=`${idPrefix}-${nav.length+1}`;nav.push({id,title});
       html.push(`<section id="${id}" class="docs-section"><h2>${inline(title)}</h2>`);continue;
     }
     if(line.startsWith('```')) {
       const lang=line.slice(3); const code:string[]=[];
       while(++i<lines.length&&!lines[i].startsWith('```'))code.push(lines[i]);
-      html.push(`<div class="docs-code"><div><span>${escape(lang)}</span><button type="button" data-copy-code>${language==='zh-CN'?'复制':'Copy'}</button></div><pre><code>${escape(code.join('\n'))}</code></pre></div>`);continue;
+      html.push(`<div class="docs-code"><div><span>${escape(lang)}</span><button type="button" data-copy-code>${language==='zh-CN'?'复制':'Copy'}</button></div><pre><code>${escape(formatCode(lang,code.join('\n')))}</code></pre></div>`);continue;
+    }
+    if(line.startsWith('### ')) { html.push(`<h3>${inline(line.slice(4))}</h3>`); continue; }
+    if(listItem.test(line) && !line.startsWith('    ')) {
+      const ordered=/^\s*\d+\./.test(line); const items:string[]=[];
+      for(;i<lines.length&&listItem.test(lines[i])&&/^\s*\d+\./.test(lines[i])===ordered;i++) items.push(`<li>${inline(lines[i].match(listItem)![2])}</li>`);
+      i--; html.push(`<${ordered?'ol':'ul'}>${items.join('')}</${ordered?'ol':'ul'}>`); continue;
     }
     if(line.startsWith('|')) {
       const rows:string[]=[];

@@ -11,6 +11,9 @@ artifacts/
 .DS_Store
 .idea/
 .vscode/
+.claude/settings.local.json
+test-results/
+playwright-report/
 # Runtime credentials, local deployment overrides and database backups
 *.pem
 *.key

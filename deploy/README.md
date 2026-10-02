@@ -117,10 +117,10 @@ initContainer 在应用启动前执行迁移；迁移使用事务、版本记录
 
 ## 必须持久保存的内容
 
-- PostgreSQL：管理员、API Keys、用户连接及加密后的平台凭证。
+- PostgreSQL：管理员、连接器配置、项目及 API Key 哈希、用户连接及加密后的凭证。
 - `TOKEN_ENCRYPTION_KEY`：32 字节随机值的 base64 编码，丢失后数据库中的平台凭证无法解密。不可直接替换已有密钥；轮换需配套重加密迁移。
 - 公开域名：更换后需同步 GitHub App 回调，并重新保存 Notion / Linear 配置，处理已有连接迁移。
 
-更多约束见 [架构与运行](../docs/operations.md) 和 [连接器配置](../docs/provider-setup.md)。
+更多约束见 [架构与运行](../docs/operations.md) 和 [连接器配置](../docs/connector-setup.md)。
 
 配置参考：[Compose 启动依赖](https://docs.docker.com/compose/how-tos/startup-order/)、[Kubernetes init containers](https://kubernetes.io/docs/concepts/workloads/pods/init-containers/)。

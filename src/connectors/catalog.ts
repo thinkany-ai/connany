@@ -1,13 +1,28 @@
-import { ProviderError } from '../errors.js';
+import { UpstreamError } from '../errors.js';
 import type { HostedMcp } from './hosted-mcp.js';
-import type { Credentials, Identity } from './index.js';
+import type { ConnectorRuntime, Credentials, Identity } from './index.js';
+import { githubAccess } from './github-access.js';
 import { linearIdentity, notionIdentity } from './mcp-identity.js';
 
 /**
- * Built-in provider catalog. A standard hosted MCP provider (dynamic client registration,
+ * Built-in connector catalog. A standard hosted MCP connector (dynamic client registration,
  * PKCE, `/authorize` `/token` `/register` and the MCP endpoint on one origin) needs only an
- * entry here. Providers with bespoke OAuth, like GitHub Apps, keep custom handling in Providers.
+ * entry here. Connectors with bespoke OAuth, like GitHub Apps, keep custom handling in ConnectorRuntime.
  */
+/** One resource scope a connection can reach, e.g. a GitHub organization the App is installed in. */
+export interface AccessGrant { id: string; type: string; name: string; selection: 'all' | 'selected'; suspended: boolean; manage_url: string | null }
+/**
+ * Optional post-authorization step where users grant access to more resources after OAuth,
+ * such as installing a GitHub App into organizations. Connectors without it need no extra step.
+ */
+export interface ConnectorAccess {
+  /** Label of the hosted-page button that opens addUrl. */
+  label: string;
+  /** Whether a freshly authorized identity still needs this step. */
+  needsAccess: (identity: Record<string, any>) => boolean;
+  addUrl: (runtime: ConnectorRuntime) => string;
+  list: (context: { call: (tool: string, input: Record<string, unknown>) => Promise<unknown>; page: number; limit: number }) => Promise<{ total: number; data: AccessGrant[] }>;
+}
 export interface McpSpec {
   origin: string;
   /** MCP endpoint path on origin. Defaults to /mcp. */
@@ -17,11 +32,11 @@ export interface McpSpec {
   /** Send the RFC 8707 resource indicator (origin + endpoint) on token requests and authorize. */
   resource?: boolean;
 }
-export interface ProviderDefinition {
+export interface ConnectorDefinition {
   label: string;
   /** Official product homepage linked from the admin card. */
   website: string;
-  /** Inline SVG or short text rendered inside the provider badge. */
+  /** Inline SVG or short text rendered inside the connector badge. */
   icon: string;
   /** One-line capability summary shown on the admin card. */
   description: string;
@@ -31,11 +46,12 @@ export interface ProviderDefinition {
   identify?: (mcp: HostedMcp, credential: Credentials, raw: any) => Promise<Identity>;
   /** Refresh display names for existing connections without changing account identity. */
   refreshIdentity?: (mcp: HostedMcp, credential: Credentials, expected: {account_id: string; workspace_id?: string}) => Promise<Record<string, unknown>>;
+  access?: ConnectorAccess;
 }
 
 const checked = <T extends object>(identity: T) => ({...identity, identity_checked_at: new Date().toISOString()});
 
-export const providerCatalog = {
+export const connectorCatalog = {
   notion: {
     label: 'Notion',
     website: 'https://www.notion.com',
@@ -45,7 +61,7 @@ export const providerCatalog = {
     auth: 'mcp',
     mcp: { origin: 'https://mcp.notion.com', authorizeParams: { scope: 'default', prompt: 'consent' } },
     async identify(mcp, credential, raw) {
-      if (typeof raw.workspace_id !== 'string' || !raw.workspace_id || typeof raw.user_id !== 'string' || !raw.user_id) throw new ProviderError('invalid_provider_identity');
+      if (typeof raw.workspace_id !== 'string' || !raw.workspace_id || typeof raw.user_id !== 'string' || !raw.user_id) throw new UpstreamError('invalid_upstream_identity');
       const identity = { account_id: raw.user_id, account_name: 'Notion user', workspace_id: raw.workspace_id, workspace_name: 'Notion workspace', transport: 'mcp' };
       try { Object.assign(identity, await notionIdentity(mcp, credential, identity)); } catch { /* Optional metadata must not fail a valid authorization. */ }
       return checked(identity);
@@ -59,6 +75,7 @@ export const providerCatalog = {
     icon: '<svg aria-hidden="true" fill="currentColor" fill-rule="evenodd" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12 0c6.63 0 12 5.276 12 11.79-.001 5.067-3.29 9.567-8.175 11.187-.6.118-.825-.25-.825-.56 0-.398.015-1.665.015-3.242 0-1.105-.375-1.813-.81-2.181 2.67-.295 5.475-1.297 5.475-5.822 0-1.297-.465-2.344-1.23-3.169.12-.295.54-1.503-.12-3.125 0 0-1.005-.324-3.3 1.209a11.32 11.32 0 00-3-.398c-1.02 0-2.04.133-3 .398-2.295-1.518-3.3-1.209-3.3-1.209-.66 1.622-.24 2.83-.12 3.125-.765.825-1.23 1.887-1.23 3.169 0 4.51 2.79 5.527 5.46 5.822-.345.294-.66.81-.765 1.577-.69.31-2.415.81-3.495-.973-.225-.354-.9-1.223-1.845-1.209-1.005.015-.405.56.015.781.51.28 1.095 1.327 1.23 1.666.24.663 1.02 1.93 4.035 1.385 0 .988.015 1.916.015 2.196 0 .31-.225.664-.825.56C3.303 21.374-.003 16.867 0 11.791 0 5.276 5.37 0 12 0z"></path></svg>',
     auth: 'github_app',
     mcp: { origin: 'https://api.githubcopilot.com', endpoint: '/mcp/x/all' },
+    access: githubAccess,
   },
   linear: {
     label: 'Linear',
@@ -71,8 +88,8 @@ export const providerCatalog = {
     identify: async (mcp, credential) => checked(await linearIdentity(mcp, credential)),
     refreshIdentity: (mcp, credential, expected) => linearIdentity(mcp, credential, expected),
   },
-} satisfies Record<string, ProviderDefinition>;
+} satisfies Record<string, ConnectorDefinition>;
 
-export type ProviderName = keyof typeof providerCatalog;
-export const providerNames = Object.keys(providerCatalog) as [ProviderName, ...ProviderName[]];
-export const provider = (name: ProviderName): ProviderDefinition => providerCatalog[name];
+export type ConnectorName = keyof typeof connectorCatalog;
+export const connectorNames = Object.keys(connectorCatalog) as [ConnectorName, ...ConnectorName[]];
+export const connector = (name: ConnectorName): ConnectorDefinition => connectorCatalog[name];

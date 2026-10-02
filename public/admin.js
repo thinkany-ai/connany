@@ -14,7 +14,7 @@
     catch { input.focus(); input.select(); notify('已选中文本，请手动复制'); }
   }));
   const dialog = document.querySelector('#key-dialog');
-  function closeKey() { document.querySelector('#issued-key').value = ''; window.location.assign(dialog.dataset.return || '/admin/keys'); }
+  function closeKey() { document.querySelector('#issued-key').value = ''; window.location.assign(dialog.dataset.return || location.pathname); }
   document.querySelector('#close-key').addEventListener('click', closeKey);
   dialog.addEventListener('cancel', event => { event.preventDefault(); closeKey(); });
   // Never persist full keys in local/session storage or expose them through a GET endpoint.
@@ -101,11 +101,12 @@
       if (form.hasAttribute('data-key-result')) {
         document.querySelector('#issued-key').value = result.api_key;
         form.closest('dialog')?.close();
-        dialog.dataset.return = '/admin/keys';
+        dialog.dataset.return = result.project ? `/admin/projects/${encodeURIComponent(result.project.id)}` : location.pathname;
         dialog.showModal();
         return;
       }
-      if (form.dataset.redirect) window.location.assign(form.dataset.redirect);
+      if (result.redirect_url) window.location.assign(result.redirect_url);
+      else if (form.dataset.redirect) window.location.assign(form.dataset.redirect);
       else if (form.hasAttribute('data-reload')) {
         // Do not reopen the dialog this form was submitted from.
         if (form.closest('dialog')) history.replaceState(null, '', location.pathname + location.search);
@@ -123,7 +124,7 @@
   if (testForm) {
     const key = document.querySelector('#test-key');
     const user = document.querySelector('#test-user');
-    const provider = document.querySelector('#test-provider');
+    const connector = document.querySelector('#test-connector');
     const status = document.querySelector('#test-status');
     const output = document.querySelector('#test-result');
     const githubPanel = document.createElement('div');
@@ -138,7 +139,7 @@
       open.hidden = true; open.removeAttribute('href'); output.hidden = true; output.textContent = '';
       status.textContent = '等待创建测试会话。';
     }
-    [key,user,provider].forEach(input => input.addEventListener('input', reset));
+    [key,user,connector].forEach(input => input.addEventListener('input', reset));
     window.addEventListener('pagehide', () => { key.value = ''; reset(); });
     async function request(path, body) {
       const response = await fetch('/v1' + path, {
@@ -159,7 +160,7 @@
       finally {
         busy = false;
         testForm.querySelectorAll('input,select').forEach(control => { control.disabled = false; });
-        testForm.querySelector('button').disabled = !provider.selectedOptions[0] || provider.selectedOptions[0].disabled;
+        testForm.querySelector('button').disabled = !connector.selectedOptions[0] || connector.selectedOptions[0].disabled;
         check.disabled = !session || ['error','expired'].includes(session.status);
         read.disabled = !connection;
       }
@@ -168,14 +169,14 @@
       event.preventDefault();
       run(async () => {
         reset(); status.textContent = '正在验证API Key并创建会话…';
-        session = await request('/connect-sessions', {external_user_id:user.value,provider:provider.value});
+        session = await request(`/connectors/${encodeURIComponent(connector.value)}/sessions`, {external_user_id:user.value});
         open.href = session.connect_url; open.hidden = false;
         status.textContent = '授权链接已生成，15 分钟内有效。打开授权页面，完成后回来检查结果。';
       });
     });
     check.addEventListener('click', () => run(async () => {
       status.textContent = '正在查询授权结果…';
-      session = await request(`/connect-sessions/${encodeURIComponent(session.id)}?external_user_id=${encodeURIComponent(user.value)}`);
+      session = await request(`/connectors/${encodeURIComponent(session.connector)}/sessions/${encodeURIComponent(session.id)}?external_user_id=${encodeURIComponent(user.value)}`);
       connection = session.status === 'connected' ? session.connection_id : null;
       const labels = {pending:'等待打开授权页面。',authorizing:'等待完成平台授权；完成后再次检查。',processing:'正在处理授权，请稍后再次检查。',connected:'授权成功，可以试读数据。',expired:'链接已过期，请重新创建授权链接。',error:`授权失败：${session.error_code || '未知错误'}。检查配置后重新创建链接。`};
       status.textContent = labels[session.status] || session.status;
@@ -184,15 +185,17 @@
     }));
     read.addEventListener('click', () => run(async () => {
       status.textContent = '正在读取已授权的数据…'; output.hidden = true; output.textContent = '';
-      const execute = (action,input) => request('/actions/execute',{external_user_id:user.value,connection_id:connection,action,input});
+      const toolsPath = `/connections/${encodeURIComponent(connection)}/tools`;
+      const callTool = (tool,input) => request(`${toolsPath}/${encodeURIComponent(tool)}/call`,{external_user_id:user.value,input});
+      const listTools = () => request(`${toolsPath}?${new URLSearchParams({external_user_id:user.value,limit:'5'})}`);
       let result;
-      if (provider.value === 'github') {
+      if (connector.value === 'github') {
         githubPanel.replaceChildren();
         const installations = [];
-        let nextPage = 1, installationUrl;
+        let nextPage = 1, addUrl;
         while (nextPage) {
-          const response = await request(`/connections/${encodeURIComponent(connection)}/github/installations?${new URLSearchParams({external_user_id:user.value,page:String(nextPage),limit:'100'})}`);
-          installations.push(...response.data); installationUrl = response.installation_url; nextPage = response.next_page;
+          const response = await request(`/connections/${encodeURIComponent(connection)}/access?${new URLSearchParams({external_user_id:user.value,page:String(nextPage),limit:'100'})}`);
+          installations.push(...response.data); addUrl = response.add_url; nextPage = response.next_page;
         }
         const addLink = (label,url,parent) => {
           const parsed = new URL(url);
@@ -200,28 +203,45 @@
           const link = document.createElement('a'); link.textContent = label; link.href = url;
           link.target = '_blank'; link.rel = 'noopener noreferrer'; link.className = 'button secondary'; parent.append(link);
         };
-        addLink('添加组织 / 仓库 ↗',installationUrl,githubPanel);
+        addLink('添加组织 / 仓库 ↗',addUrl,githubPanel);
         for (const installation of installations) {
           const row = document.createElement('div'); row.className = 'test-actions';
-          const label = document.createElement('strong'); label.textContent = installation.account || String(installation.id); row.append(label);
-          if (installation.management_url) addLink('管理仓库权限 ↗',installation.management_url,row);
+          const label = document.createElement('strong'); label.textContent = installation.name; row.append(label);
+          if (installation.manage_url) addLink('管理仓库权限 ↗',installation.manage_url,row);
           const button = document.createElement('button'); button.className = 'button secondary'; button.textContent = '试读此组织仓库';
           button.addEventListener('click', () => run(async () => {
             output.hidden = true;
-            const repositories = await execute('github.repositories.list',{installation_id:installation.id,limit:10});
+            const repositories = await callTool('github.repositories.list',{installation_id:Number(installation.id),limit:10});
             output.textContent = JSON.stringify(repositories,null,2); output.hidden = false;
-            status.textContent = `${installation.account} 仓库读取成功。`;
+            status.textContent = `${installation.name} 仓库读取成功。`;
           }));
           row.append(button); githubPanel.append(row);
         }
-        const tools = await request('/actions/discover',{provider:'github',external_user_id:user.value,connection_id:connection,limit:5});
+        const tools = await listTools();
         result = {installations,tools};
         status.textContent = installations.length ? '已获取组织列表，请选择组织试读。管理入口可能需要组织管理员权限。' : '账号已连接，尚未添加仓库。可以点击添加组织 / 仓库，完成后再次试读刷新列表。';
       } else {
-        result = await request('/actions/discover',{provider:provider.value,external_user_id:user.value,connection_id:connection,limit:5});
+        result = await listTools();
         status.textContent = '读取成功。空列表表示当前授权范围内没有可见数据。';
       }
       output.textContent = JSON.stringify(result,null,2); output.hidden = false;
     }));
+  }
+  document.querySelectorAll('[data-copy-code]').forEach(button => button.addEventListener('click', async () => {
+    const code = button.closest('.docs-code').querySelector('pre code');
+    try { await navigator.clipboard.writeText(code.textContent); notify('已复制'); }
+    catch { const range = document.createRange(); range.selectNodeContents(code); getSelection().removeAllRanges(); getSelection().addRange(range); notify('已选中文本，请手动复制'); }
+  }));
+  if (document.querySelector('.admin-docs')) {
+    const updateDocsNav = () => {
+      const docs = [...document.querySelectorAll('.admin-docs')].find(el => el.offsetParent);
+      if (!docs) return;
+      const sections = [...docs.querySelectorAll('.docs-section')];
+      const current = sections.filter(section => section.getBoundingClientRect().top <= 80).at(-1) || sections[0];
+      docs.querySelectorAll('.admin-docs-layout>nav a').forEach(link => { if (link.hash === '#' + current?.id) link.setAttribute('aria-current','location'); else link.removeAttribute('aria-current'); });
+    };
+    document.addEventListener('scroll', updateDocsNav, { passive: true });
+    new MutationObserver(updateDocsNav).observe(document.documentElement, { attributes: true, attributeFilter: ['lang'] });
+    updateDocsNav();
   }
 })();

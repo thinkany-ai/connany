@@ -74,7 +74,7 @@ GitHub App 安装授权决定仓库范围；用户 OAuth 决定操作主体。Co
 
 ## 新增内置连接器
 
-连接器统一登记在 `src/providers/catalog.ts`。标准的官方远程 MCP（同一域名下提供 `/register`、`/authorize`、`/token` 和 MCP 端点，支持动态客户端注册与 PKCE）只需新增一条目录项：
+连接器统一登记在 `src/connectors/catalog.ts`。标准的官方远程 MCP（同一域名下提供 `/register`、`/authorize`、`/token` 和 MCP 端点，支持动态客户端注册与 PKCE）只需新增一条目录项：
 
 - `website`：官网地址，用于连接器卡片的外链。
 - `label`、`icon`：后台卡片的名称和图标（内联 SVG，推荐取自 [LobeHub Icons](https://icons.lobehub.com)）。
@@ -82,6 +82,8 @@ GitHub App 安装授权决定仓库范围；用户 OAuth 决定操作主体。Co
 - `identify`：从 token 响应或 MCP 工具解析 `account_id`（及可选 `workspace_id`），用于连接去重和重新授权校验。
 - 可选 `refreshIdentity`：刷新已有连接的显示名称。
 
-后台「连接器」、连接路由、动作校验、工具发现会自动出现新连接器，无需修改数据库。需要自定义 OAuth 的连接器（如 GitHub App）仍在 `Providers` 中单独实现。
+后台「连接器」、连接路由、工具校验、工具列表会自动出现新连接器，无需修改数据库。需要自定义 OAuth 的连接器（如 GitHub App）仍在 `ConnectorRuntime`（`src/connectors/index.ts`）中单独实现。
 
 升级到此版本需运行一次 `pnpm db:migrate`（`005_provider_catalog.sql` 移除数据库中写死的连接器名单约束）。
+
+`006_projects_connectors.sql` 统一了术语：`provider_settings` / `provider_apps` 改名为 `connectors` / `connector_apps`，连接与会话的 `provider` 列改名为 `connector`，项目的 API Key 拆分到 `api_keys` 表（现有 Key 自动迁移、继续可用），并新增预留的 `workspaces` 表。

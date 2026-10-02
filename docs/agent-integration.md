@@ -1,398 +1,329 @@
-# Agent 接入 Connany v0.1
+# Agent 接入 Connany
 
-本文可直接交给另一个 agent 产品的开发者。Connany 提供三个平台的账号连接和动态操作目录。无需为每个平台自行实现 OAuth。
+本文交给 agent 产品的开发者或开发 agent，按顺序实现即可。接入完成后，你的 agent 用户可以授权自己的 Notion、GitHub、Linear 等账号，并在对话中让模型通过这些账号读写数据。你不需要为每个平台自己实现 OAuth、保存 token 或对接 MCP。
 
-## 0. 从服务管理员取得三个信息
+## 0. 整体流程
 
-1. `CONNANY_BASE_URL`：运行中的服务地址，例如 `https://connect.your-domain.com`。
-2. `CONNANY_API_KEY`：属于你的项目的 `cn_live_...` 密钥。
-3. `return_url`（可选）：授权后浏览器返回的地址，每次创建会话时传入，例如 `https://agent.example/settings/connections`。
-
-管理员可在 `/admin` 为不同 agent 创建独立项目和 key，平台应用凭证由管理员统一配置。每位用户仍需单独授权，不能用项目 key 代替用户授权。
-
-项目 key 只保存在 **agent 后端**。不要交给浏览器、桌面客户端、LLM prompt、工具参数或最终用户。桌面/CLI 产品也应通过自己的后端代理 Connany；本仓库命令行示例仅供开发者本地联调。
-
-你的产品继续使用自己的用户系统。所有 `external_user_id` 必须来自后端已验证的登录会话，不能直接信任用户请求体、URL 或模型提供的 user ID。
-
-## 1. 查看平台是否已配置
-
-```bash
-curl "$CONNANY_BASE_URL/v1/providers" \
-  -H "Authorization: Bearer $CONNANY_API_KEY"
+```text
+           你的 agent 后端                                  Connany
+用户点击「连接 Notion」或对话中需要 Notion
+  │  POST /v1/connectors/notion/sessions ───────────────▶  返回 connect_url
+  │  把 connect_url 交给用户在浏览器打开 ─── 用户在 Notion 授权 ───▶  保存凭证，生成连接
+  │  GET  /v1/connectors/notion/sessions/{id} ──────────▶  status=connected, connection_id
+  │
+对话中
+  │  GET  /v1/connections?external_user_id=…&status=connected  ▶  用户已授权的连接
+  │  GET  /v1/connections/{id}/tools ────────────────────▶  该连接可用的工具
+  │  把工具交给模型；模型选择工具后
+  │  POST /v1/connections/{id}/tools/{name}/call ────────▶  用用户的凭证调用上游，返回结果
 ```
 
-响应 `data` 中每项包含 `name`、`enabled`；GitHub 还包含 `installation_url`。禁用的平台需要 Connany 管理员先填凭证。
+核心概念：
 
-## 2. 创建连接链接
+| 概念 | 说明 |
+| --- | --- |
+| 连接器（connector） | Connany 支持的平台集成，如 `notion`、`github`、`linear`，由 Connany 管理员配置和启用 |
+| 项目（project） | 你的 agent 产品在 Connany 中的身份，API Key 属于项目 |
+| 用户（`external_user_id`） | 你的产品中的用户 ID，在项目内唯一 |
+| 连接（connection） | 某个用户在某个连接器上授权的一个账号。一个用户可以有多个连接，同一连接器也可以连多个账号或工作区 |
+| 工具（tool） | 连接器提供的操作，如 `notion.notion-search`。调用工具时必须指定连接 |
 
-agent 后端调用：
+## 1. 准备
 
-```bash
-curl "$CONNANY_BASE_URL/v1/connect-sessions" \
-  -H "Authorization: Bearer $CONNANY_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "external_user_id": "user_123",
-    "provider": "notion",
-    "return_url": "https://agent.example/settings/connections"
-  }'
-```
+从 Connany 管理员处取得：
 
-`provider` 可取 `notion`、`github`、`linear`。`return_url` 每次请求自行传入，无需登记。允许 HTTPS、本机 HTTP（`localhost` / `127.0.0.1` / `[::1]`，任意端口）和应用自定义协议（如 `myapp://oauth/callback`，桌面或移动客户端可直接唤起应用）；不能含用户名、密码或 `#fragment`，不允许 `javascript:`、`data:`、`file:` 等协议。不需要返回页面时省略。桌面客户端也可以不传，由后端轮询会话状态。
+1. `CONNANY_BASE_URL`：服务地址，例如 `https://connect.your-domain.com`。
+2. `CONNANY_API_KEY`：你的项目的 `cn_live_...` 密钥。管理员在后台「项目」中创建项目时生成。
 
-```json
-{
-  "id": "cs_...",
-  "status": "pending",
-  "provider": "notion",
-  "connect_url": "https://connect.your-domain.com/connect/随机短期令牌",
-  "expires_at": "2026-09-25T10:15:00.000Z"
-}
-```
+安全原则，实现时必须遵守：
 
-将 `id` 关联到当前登录用户，向该用户显示 `connect_url`。链接是 15 分钟有效的临时授权入口，应视为敏感链接，不写入公共日志或共享给别人。
+- **API Key 只放在 agent 后端**，不要交给浏览器、桌面客户端、模型提示词或工具参数。桌面和 CLI 产品也要通过自己的后端访问 Connany。
+- **`external_user_id` 只能来自后端已验证的登录会话**，不能来自请求体、URL 或模型输出。
+- **用户和连接由后端绑定**，模型只能填写工具的业务参数，不能决定用哪个用户、哪个连接。
+- **第三方返回的内容是不可信数据**，可能包含诱导模型的指令，不要当作系统指令执行。
 
-用户在同一浏览器打开 connect_url 后直接进入平台授权，无需 Connany 二次确认。成功后，有 return_url 会自动返回 agent，否则显示完成页。GitHub 账号授权和安装是独立步骤，Connany 不会自动跳转安装页。安装完成后回到 agent，实时查询 installations 确认可用范围。组织安装可能需要管理员批准。不要把授权回调切换到另一个浏览器/嵌入式 WebView。
-
-## 3. 查询连接结果
-
-每 5 秒由 **agent 后端** 查询一次，直到成功、失败或过期：
-
-```bash
-curl "$CONNANY_BASE_URL/v1/connect-sessions/cs_...?external_user_id=user_123" \
-  -H "Authorization: Bearer $CONNANY_API_KEY"
-```
-
-```json
-{
-  "id": "cs_...",
-  "provider": "notion",
-  "external_user_id": "user_123",
-  "status": "connected",
-  "connection_id": "conn_...",
-  "error_code": null,
-  "expires_at": "2026-09-25T10:15:00.000Z"
-}
-```
-
-状态含义：
-
-| 状态 | 处理方式 |
-|---|---|
-| `pending` | 用户尚未开始平台授权，继续等待 |
-| `authorizing` | 用户正在平台授权，继续等待 |
-| `processing` | 回调正在处理，继续等待 |
-| `connected` | 保存 `connection_id`，查询连接信息 |
-| `error` | 展示重试入口；常见错误 `access_denied`、`account_mismatch`、`provider_error` |
-| `expired` | 停止轮询，创建新会话 |
-
-如果设置了 `return_url`，用户点击结果页“返回 agent”时会携带 `connany_session_id` 查询参数。**不要因为浏览器跳转就认定成功**；后端应校验此 session 属于当前用户，并向 Connany 查询。
-
-`connection_id` 不是密码，但也不是访问凭证。用户不能仅凭它跨账号访问连接。
-
-## 4. 查询、展示连接
-
-支持 `provider=notion|github|linear`、`status=connected|reauth_required|revoked`、`limit=1..100`（默认 50）和 `after` 游标。默认返回全部状态，展示可用账号时可指定 `status=connected`。分页时保留相同筛选条件，以 `next_cursor` 作为下一页的 `after`，返回 null 时结束。状态来自本地记录，不能代替上游检查。
+在后端初始化 SDK。下载 TypeScript SDK（仓库中的 `sdk/client.ts`，文档页顶部也可下载）放到你的服务端项目（无第三方依赖，Node.js 22+），也可以按下文的 HTTP 接口自行封装：
 
 ```ts
-const page = await connany.listConnections(userId, {
-  provider: 'notion', status: 'connected', limit: 20,
-});
-// 下一页：添加 after: page.next_cursor（非 null 时）
-// 兼容旧签名：listConnections(userId, cursor)
-```
-
-### 主动检查连接
-
-```http
-POST /v1/connections/conn_.../check
-Authorization: Bearer cn_live_...
-Content-Type: application/json
-
-{"external_user_id":"user_123"}
-```
-
-SDK：`await connany.checkConnection(connectionId, userId)`。
-
-成功返回 `connection_id`、`provider`、`checked_at`、`tool_count` 和 `request_id`。检查会验证连接归属、按需刷新 token 并获取官方工具目录，不执行任何业务工具。它仅代表这次工具目录请求成功，不保证指定仓库、页面或写操作可用，也不表示所有返回工具都已获资源权限。GitHub 添加仓库仍需查询 installations。
-
-- `reauth_required`（409）：展示重新授权入口，调用 `reconnect`。
-- `connection_revoked`（409）：连接已断开，应创建新连接。
-- `not_found`（404）：连接不存在或不属于当前项目/用户。
-- 其他上游或网络错误：展示重试入口，不直接判断授权已失效。
-
-建议用户点击“检查连接”时调用，无需每次列出账号都检查全部连接。`external_user_id` 必须来自已登录的服务端会话；状态和错误请以 API 返回为准。
-
-
-```http
-GET /v1/connections?external_user_id=user_123&limit=50
-GET /v1/connections/conn_...?external_user_id=user_123
-Authorization: Bearer cn_live_...
-```
-
-列表返回 `{ "data": [...], "next_cursor": null }`。有下一页时将 `next_cursor` 传为 `after`；单页最多 100 条。
-
-连接包含 `id`、`provider`、`status`、`identity`、时间和撤销状态，永远不包含平台 token。
-
-连接 `status`：`connected`、`reauth_required`、`revoked`。Notion/Linear 的 `identity` 包含工作区；GitHub 的 `identity` 包含用户和授权时可见的安装列表。
-
-**GitHub OAuth 成功不等于已经安装 App。** `identity.needs_installation=true` 时，引导用户安装，再调用 `github.installations.list` 获取最新状态。`identity` 是授权时快照，仓库/安装权限以实时 API 结果为准。
-
-## 5. 让 agent 读取数据
-
-获取工具目录：
-
-```http
-GET /v1/actions
-Authorization: Bearer cn_live_...
-```
-
-每项包含 `name`、`provider`、`description`、`read_only` 和 `input_schema`，可以映射为你的 agent 框架使用的工具定义。
-
-执行工具（以下示例使用已授权的 GitHub 连接；Notion / Linear 先按文末说明动态发现工具）：
-
-```bash
-curl "$CONNANY_BASE_URL/v1/actions/execute" \
-  -H "Authorization: Bearer $CONNANY_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "external_user_id": "user_123",
-    "connection_id": "conn_...",
-    "action": "github.installations.list",
-    "input": { "limit": 10 }
-  }'
-```
-
-响应：`{ "data": 平台返回的数据, "request_id": "req_..." }`。
-
-**在 agent 工具执行器中固定当前用户和已选择的连接**。只让模型填写 action 的业务参数，不让模型决定 `external_user_id` 或任意连接 ID。多账号时让用户选择工作区/账号，不能默认用查询结果的第一条。
-
-| Action | input | data / 分页 |
-|---|---|---|
-| `github.installations.list` | `page?`, `limit?` | `installations`, `total_count` |
-| `github.repositories.list` | `installation_id`（整数）, `page?`, `limit?` | `repositories`, `total_count` |
-
-`limit` 默认 20，范围 1–100；GitHub `page` 默认 1。GitHub 通过安装和用户权限的交集读取仓库，不使用可能混入其他仓库的 `/user/repos`。
-
-Notion 把 `next_cursor` 传为下一次 `cursor`；Linear 在 `hasNextPage=true` 时把 `endCursor` 传为 `cursor`；GitHub 用 `page + 1`，结合 `total_count` 判断结束。
-
-不提供任意 URL 代理或任意 GraphQL。GitHub 目录包含读写操作；第三方内容仍可能包含不可信指令，agent 应当把返回内容当作数据。
-
-## 6. TypeScript 接入示例
-
-复制本仓库 [`sdk/client.ts`](../sdk/client.ts) 到你的服务端项目即可，无额外运行依赖（Node.js 22+）。还没有发布 npm 包。
-
-```ts
-import { Connany, ConnanyError } from './connany-client.js';
+import { Connany, ConnanyError, createAgentTools } from './connany-client.js';
 
 const connany = new Connany({
   baseUrl: process.env.CONNANY_BASE_URL!,
   apiKey: process.env.CONNANY_API_KEY!,
 });
+```
 
-// authenticatedUser.id 必须由你自己的后端认证中间件提供。
-const session = await connany.createSession({
-  external_user_id: authenticatedUser.id,
-  provider: 'linear',
-  return_url: 'https://agent.example/settings/connections',
+所有 HTTP 请求都带 `Authorization: Bearer $CONNANY_API_KEY`。完整字段说明见服务上的 API 文档（`/docs`）。
+
+## 2. 让用户授权连接器
+
+### 2.1 展示可连接的连接器
+
+```ts
+const { data: connectors } = await connany.connectors();
+// [{ name: 'notion', title: 'Notion', avatar_url: 'https://…/connectors/notion/avatar.svg', tools_synced_at: … }, …]
+```
+
+对应 `GET /v1/connectors`，只返回管理员已启用的连接器。用 `title` 和 `avatar_url` 渲染「连接账号」入口（`avatar_url` 可直接放进 `<img>`）。如果想在用户连接之前介绍某个连接器能做什么，可以读工具目录 `connany.toolCatalog({ connector: 'notion' })`（`GET /v1/tools?connector=notion`）。
+
+### 2.2 创建授权会话，把链接交给用户
+
+授权入口有两个，建议都实现：
+
+- **设置页**：在「已连接账号」页面放连接按钮。
+- **对话中**：用户要求的操作需要某个平台、但还没有连接时，在对话里给出授权链接（见 3.4）。
+
+两种入口都由后端创建会话：
+
+```ts
+const session = await connany.createSession('notion', {
+  external_user_id: currentUser.id,
+  return_url: 'https://agent.example/settings/connections', // 可选
 });
-// 将 session.connect_url 返回给当前用户打开。
+// session.connect_url：交给用户在浏览器打开
+// session.id：记录下来，用于确认结果
+```
 
-// OAuth 完成后查询，不能信任浏览器传回的成功标志。
-const status = await connany.getSession(session.id, authenticatedUser.id);
-if (status.status === 'connected' && status.connection_id) {
-  const catalog = await connany.discoverActions({
-    provider: 'linear',
-    external_user_id: authenticatedUser.id,
-    connection_id: status.connection_id,
-    read_only: true,
-  });
-  // 按 catalog.data 返回的 name / input_schema 构建调用，或使用 createAgentTools。
+对应 `POST /v1/connectors/{name}/sessions`，请求体 `{external_user_id, return_url?}`。
 
+- **网页产品**：可以直接跳转到 `connect_url`，或新开标签页打开。
+- **对话中**：把链接渲染成一个按钮，例如「连接 Notion」。
+- **桌面或移动应用**：用系统浏览器打开。不要用嵌入式 WebView，有的平台会拒绝在 WebView 里登录，授权回调也需要在同一个浏览器里完成。
+
+`connect_url` 15 分钟内有效，只能使用一次，属于敏感链接，不要写入公共日志或分享给别人。用户打开后直接进入平台的授权页。
+
+`return_url` 是授权完成后浏览器返回的地址，支持 HTTPS、本机 HTTP（`localhost` / `127.0.0.1` / `[::1]`，任意端口）和应用自定义协议（如 `myapp://oauth/callback`）。不传则显示 Connany 的完成页，提示用户回到 agent。
+
+### 2.3 确认授权结果
+
+浏览器跳回不代表授权成功，必须由后端查询会话：
+
+```ts
+const result = await connany.getSession('notion', session.id, currentUser.id);
+```
+
+对应 `GET /v1/connectors/{name}/sessions/{id}?external_user_id=…`。确认方式有两种：
+
+- **轮询**：用户打开链接后，后端每 5 秒查询一次，直到结果不再是进行中。适合对话场景：轮询期间在对话里显示「等待授权…」，成功后继续回答用户。
+- **回跳**：设置了 `return_url` 时，成功后浏览器会带着 `connany_session_id` 跳回。后端先确认这个会话属于当前登录用户，再用上面的接口查询一次。`connany_session_id` 来自浏览器，不能直接信任。
+
+| status | 处理 |
+| --- | --- |
+| `pending` / `authorizing` / `processing` | 授权进行中，继续等待 |
+| `connected` | 拿到 `connection_id`，授权完成 |
+| `error` | 展示 `error_code` 和重试入口，常见值 `access_denied`（用户取消）、`account_mismatch`、`upstream_error` |
+| `expired` | 链接过期，重新创建会话 |
+
+### 2.4 补充资源访问
+
+有的连接器在授权之后，还需要用户单独授予可访问的资源。目前只有 GitHub 需要：账号授权成功后，还要把 GitHub App 安装到个人账号或组织并选择仓库，才能读到仓库。
+
+连接对象上的 `needs_access` 为 `true` 时，提示用户补充授权：
+
+```ts
+const access = await connany.listAccess(connectionId, currentUser.id);
+// { add_url: 'https://github.com/apps/…/installations/new', total: 0, next_page: null, data: [] }
+```
+
+对应 `GET /v1/connections/{id}/access?external_user_id=…`。
+
+- **`add_url` 不为 null**：展示「添加组织 / 仓库」按钮，打开 `add_url`。用户完成后回到 agent，重新查询这个接口，不需要重新授权。
+- **`data`**：已经获得的访问范围，比如安装到了哪些组织。每项的 `manage_url` 可以修改范围，有时需要组织管理员权限。
+- **不需要这一步的连接器**：返回 `add_url: null` 和空列表。所有连接器都用同一套逻辑处理，不用按平台写分支。
+
+不要把「账号已连接」展示成「仓库已就绪」。
+
+### 2.5 管理已连接的账号
+
+```ts
+const { data: connections } = await connany.listConnections(currentUser.id, { status: 'connected' });
+await connany.checkConnection(connectionId, currentUser.id);              // 用户点「检查连接」时
+const again = await connany.reconnect(connectionId, { external_user_id: currentUser.id }); // 授权失效时
+await connany.disconnect(connectionId, currentUser.id);                    // 用户断开
+```
+
+| 操作 | HTTP 接口 | 说明 |
+| --- | --- | --- |
+| 列出连接 | `GET /v1/connections?external_user_id=…` | 可用 `connector`、`status` 过滤；用 `next_cursor` 翻页 |
+| 查询单个连接 | `GET /v1/connections/{id}?external_user_id=…` | 含 `identity`（账号名、工作区等，字段因连接器而异）和 `needs_access` |
+| 检查连接 | `POST /v1/connections/{id}/check` | 验证授权是否仍然有效，不执行业务操作 |
+| 重新授权 | `POST /v1/connections/{id}/reconnect` | 返回新会话，按 2.2、2.3 处理；必须授权原账号，成功后 `connection_id` 不变 |
+| 断开 | `DELETE /v1/connections/{id}?external_user_id=…` | 立即禁止后续调用，再尝试撤销平台授权；`revocation_status=failed` 时可重试 |
+
+展示账号时用 `identity.account_name`、`identity.workspace_name`，区分同一连接器下的多个账号或工作区。要连接另一个账号，就再创建一个新会话；`reconnect` 只用于重新授权原账号。
+
+## 3. 在对话中调用工具
+
+### 3.1 确定这轮对话可用的连接
+
+每轮对话开始时，后端查询当前用户的有效连接：
+
+```ts
+const { data: connections } = await connany.listConnections(currentUser.id, { status: 'connected' });
+```
+
+- **没有连接**：不注册 Connany 工具，或者只注册 3.4 中的「请求连接」工具。
+- **同一连接器有多个连接**（例如两个 Notion 工作区）：让用户选择，或者在会话设置里记住用户的选择。不要默认用列表第一条。
+- 连接状态是本地记录。平台侧撤销的授权，要等下次调用时才会被发现，这时按 3.5 处理。
+
+### 3.2 把工具交给模型
+
+推荐用 SDK 的适配器。它只向模型暴露两个工具 `list_tools` 和 `call_tool`，模型按需搜索工具，避免一次把几十个工具定义塞进上下文：
+
+```ts
+const adapter = createAgentTools(connany, {
+  externalUserId: currentUser.id,
+  connectionId: selected.id,      // 后端确认属于当前用户的连接
+  connector: selected.connector,
+  allowWrites: false,             // 写操作由后端按产品策略开启，不能由模型决定
+  // allowedTools: ['github.get_file_contents'], // 可选：限定可用工具
+});
+
+// 1. 把 adapter.tools（name / description / input_schema）转换成你的模型框架的工具格式
+// 2. 模型发起工具调用时，由后端执行：
+const output = await adapter.call(toolCall.name, toolCall.arguments);
+// 3. 把 output 作为工具结果返回给模型
+```
+
+- **`list_tools({query?, offset?})`**：搜索这个连接可用的工具，返回名称、说明、`input_schema` 和 `read_only`。
+- **`call_tool({tool, input})`**：调用工具。适配器会先确认工具存在、并且符合读写策略，再按绑定的用户和连接调用；模型传入其他用户或连接的参数会被拒绝。
+
+**同时使用多个连接**（例如一边读 Notion，一边建 GitHub Issue）：给每个连接各创建一个适配器，工具名加上前缀区分，比如 `notion_list_tools`、`github_call_tool`，再一起注册给模型，收到调用后分发给对应的适配器。
+
+**不用适配器**：可以直接把工具列表交给模型：
+
+```ts
+const { data: tools } = await connany.listTools(selected.id, currentUser.id, { read_only: true });
+// 每项：name、connector、description、read_only、required_permissions、input_schema
+```
+
+对应 `GET /v1/connections/{id}/tools?external_user_id=…`（可选 `query`、`read_only`、`limit`、`offset`）。连接已断开或需要重新授权时返回 409。工具由上游官方 MCP 动态提供，不要硬编码工具名和参数；`read_only` 未知的工具按写操作处理。
+
+### 3.3 执行工具调用
+
+```ts
+const { data } = await connany.callTool(selected.id, currentUser.id, 'notion.notion-search', { query: 'Q3 roadmap' });
+```
+
+对应 `POST /v1/connections/{id}/tools/{name}/call`，请求体 `{external_user_id, input}`。
+
+- **结果**：`data` 是上游 MCP 的原始结果，通常含 `content`（文本或其他内容块）和 `structuredContent`。把它作为工具结果交给模型即可。
+- **令牌刷新**：凭证快过期时 Connany 会自动刷新，后端不用处理 token。
+- **写操作**：需要用户确认的写操作，由后端在执行前向用户确认，不能依赖模型自己声明「已确认」。写请求超时后，上游可能已经执行成功，先查询目标状态，不要盲目重试。
+
+### 3.4 对话中引导用户授权
+
+用户在对话中要求的操作需要某个平台、但还没有可用连接时，不要让模型说「我做不到」，而是在对话里引导授权。推荐由后端额外给模型注册一个工具：
+
+```ts
+const connectTool = {
+  name: 'request_connection',
+  description: '当用户需要的操作依赖一个尚未连接的平台时调用，向用户展示授权按钮。',
+  input_schema: { type: 'object', properties: { connector: { type: 'string', enum: connectors.map(c => c.name) } }, required: ['connector'] },
+};
+
+// 模型调用 request_connection 时：
+const session = await connany.createSession(args.connector, { external_user_id: currentUser.id });
+// 在对话界面渲染一个「连接 Notion」按钮，指向 session.connect_url，并开始轮询（2.3）
+// 告诉模型：已向用户展示授权按钮，等待用户完成
+```
+
+用户完成授权后，后端拿到 `connection_id`，用新连接创建适配器，然后继续这轮对话，或者提示用户「已连接，可以继续」。`connect_url` 只渲染给当前用户，不要写进模型上下文。
+
+### 3.5 对话中遇到授权失效
+
+工具调用返回下面的错误时，在对话里给出对应的提示，不要让模型无限重试：
+
+| 错误 | 对话中的处理 |
+| --- | --- |
+| `409 reauth_required` | 调用 `reconnect` 拿到新的授权链接，展示「重新连接 Notion」按钮，完成后重试这次调用 |
+| `409 connection_revoked` | 连接已断开，展示连接按钮，让用户重新创建连接 |
+| `mcp_tool_error`、`502 upstream_error` | 上游执行失败或没有权限。把错误告诉模型，由模型向用户解释，例如可能缺少页面或仓库权限 |
+| GitHub 读不到仓库 | 连接的 `needs_access` 为 true，或访问范围里没有目标组织时，按 2.4 引导用户补充授权 |
+
+## 4. 同步状态变化
+
+管理员在后台断开连接、用户在平台上撤销授权、授权失效等变化，不是由你的后端发起的。Connany 没有 webhook 推送，后端用一个后台任务轮询项目的事件流：
+
+```ts
+let cursor = await loadCursor(); // 自己持久化，初始为 '0'
+const { data: events, next_cursor } = await connany.events({ after: cursor });
+for (const event of events) {
+  // event.type、event.external_user_id、event.connection_id、event.data
 }
+await saveCursor(next_cursor);
 ```
 
-端到端命令行示例见 [`examples/agent.ts`](../examples/agent.ts)。SDK 默认请求超时 60 秒，不自动重试，调用方可以按下方错误规则处理。
+对应 `GET /v1/events?after=…`，可选 `external_user_id`、`connection_id`、`type` 过滤。一次轮询覆盖整个项目，不用逐个用户查。按 `seq` 升序返回，保存 `next_cursor` 就不会漏，也不会重复。
 
-## 7. 重连和断开
+| type | 建议处理 |
+| --- | --- |
+| `connection.connected` | 刷新该用户的账号列表 |
+| `connection.failed` | 提示用户重试授权 |
+| `connection.reauth_required` | 在账号列表和对话中提示重新连接 |
+| `connection.revoked` | 从账号列表移除，停止在对话中使用 |
+| `tool.succeeded` / `tool.failed` | 审计或排查问题 |
 
-凭证刷新由 Connany 自动处理。若执行返回 `409 reauth_required`，显示“重新连接”按钮：
+遇到不认识的事件类型直接忽略。
 
-```http
-POST /v1/connections/conn_.../reconnect
-Content-Type: application/json
-Authorization: Bearer cn_live_...
-
-{"external_user_id":"user_123","return_url":"https://agent.example/settings/connections"}
-```
-
-返回新的短期连接会话。用户必须授权原账号及工作区，成功后保留 `connection_id`。连接其他账号时创建新会话，不使用 reconnect。
-
-断开：
-
-```http
-DELETE /v1/connections/conn_...?external_user_id=user_123
-Authorization: Bearer cn_live_...
-```
-
-返回连接对象。`status=revoked` 表示 Connany 已禁止继续访问；`revocation_status=succeeded` 表示平台撤销成功。若为 `failed`，本地仍已断开，可重试同一 DELETE，或引导用户到平台撤销应用授权。GitHub 撤销用户 token 不等于卸载组织/仓库中的 App。
-
-## 8. 错误和事件
+## 5. 错误处理
 
 错误格式：
 
 ```json
-{
-  "error": { "code": "reauth_required", "message": "Authorization expired or was revoked. Reconnect this account." },
-  "request_id": "req_..."
-}
+{ "error": { "code": "reauth_required", "message": "Authorization expired or was revoked. Reconnect this account." }, "request_id": "req_..." }
 ```
 
-| HTTP / code | 建议处理 |
-|---|---|
-| `400 invalid_request` | 检查参数/schema；不盲目重试 |
-| `400 invalid_request`（return_url） | 使用 HTTPS、本机 HTTP 或应用自定义协议 |
-| `401 unauthorized` | 检查项目 key 是否已轮换、项目是否停用；不能通过重连第三方账号解决 |
-| `404 not_found` | 资源不存在或不属于当前项目/用户 |
-| `409 reauth_required` | 创建 reconnect 会话 |
-| `409 connection_revoked` | 用户已断开；由用户决定是否重新创建连接 |
-| `429` | 读取 `Retry-After`，退避并加入抖动 |
-| `502 provider_error` | 检查 `details.upstream_status`；403/404 可能是资源权限问题，5xx 可以有限重试 |
-| `503 provider_not_configured` | 联系 Connany 管理员配置应用凭证 |
+SDK 会抛出 `ConnanyError`，带 `status`、`code`、`requestId` 和 `details`。
 
-每项目 120 请求/分钟，包含轮询；多个浏览器标签页应共享后端轮询结果。API body 最大 32 KB。
+| HTTP / code | 处理 |
+| --- | --- |
+| `400 invalid_request` | 参数错误，检查字段，不要重试 |
+| `400 connector_mismatch` / `tool_not_found` | 工具不属于这个连接的连接器，或工具名错误；重新列出工具 |
+| `401 unauthorized` | API Key 错误、已吊销，或项目已停用；联系 Connany 管理员 |
+| `404 not_found` | 对象不存在，或不属于当前项目或用户 |
+| `404 connector_not_found` | 连接器名称错误，以 `GET /v1/connectors` 为准 |
+| `409 reauth_required` / `connection_revoked` | 见 3.5 |
+| `410 session_unavailable` | 授权链接过期或已使用，重新创建会话 |
+| `429 rate_limited` | 读取 `Retry-After`，退避后重试 |
+| `502 upstream_error`、`mcp_tool_error` | 上游失败，查看 `details`；403/404 多为权限问题，5xx 可有限重试 |
+| `503 connector_not_configured` | 连接器未启用，联系 Connany 管理员 |
 
-需要追踪状态时：
+限制：每个项目每分钟最多 120 个请求，包括轮询；请求体最大 32 KB；SDK 请求超时 60 秒，不自动重试。多个浏览器标签页应共享后端的轮询结果。
 
-```http
-GET /v1/events?external_user_id=user_123&after=0
-```
+## 6. 各连接器说明
 
-返回 `{ data: [...], next_cursor: "123" }`。保存字符串游标，下次传入 `after`；单次最多 100 条，支持追赶。事件包括 `connection.connected`、`connection.failed`、`connection.reauth_required`、`connection.revoked`、`action.succeeded`、`action.failed`。事件不保存业务正文或 token。
+所有连接器的工具都来自上游官方 MCP，名称格式为 `<连接器>.<官方工具名>`，参数以 `input_schema` 为准。
 
-首版没有推送 webhook。平台端直接撤销的授权，在下次工具调用时检测；不要把缓存中的 `connected` 当作永久有效。
+### Notion
 
-## 联调验收
+工具如 `notion.notion-search`、`notion.notion-fetch`。连接的 `identity` 含工作区名称；用户可以连接多个工作区，每个都是独立的连接。
 
-- 用户 A 在一个平台完成连接，拿到 `connection_id` 并成功读取数据。
-- 同一产品的用户 B 看不到、也不能使用用户 A 的连接。
-- 授权取消、链接过期时能重新生成链接。
-- GitHub 安装后能从 installations → repositories 读取所选仓库。
-- 在 Connany 中断开后，工具调用被拒绝。
-- 不把项目密钥或平台 token 暴露到客户端和模型上下文。
+### Linear
 
-## GitHub：账号授权与仓库安装分别接入
+工具如 `linear.get_user`。`identity` 含用户名称，工作区名称仅在上游提供时返回。
 
-OAuth 成功即为 `connected`，无安装也属于账号连接成功。不要将它展示为“仓库已就绪”。`identity.needs_installation` 是授权时快照，后续判断使用实时接口：
+### GitHub
 
-```http
-GET /v1/connections/conn_.../github/installations?external_user_id=user_123&page=1&limit=20
-Authorization: Bearer <项目 API key>
-```
+工具如 `github.get_me`、`github.get_file_contents`。授权账号后还需安装 App（见 2.4）。另有一组兼容的 REST 工具，不出现在工具列表中，但可以直接调用：
 
-SDK：`await connany.githubInstallations(connectionId, authenticatedUser.id)`。
-返回 `{ installation_url, total_count, next_page, data }`。`data` 每项有 `id`、`account`、`account_type`、`repository_selection`、`suspended_at`、`management_url`（可能为 null）。用 next_page 翻页，直到 null。
+| 工具 | input | 返回 |
+| --- | --- | --- |
+| `github.installations.list` | `page?`、`limit?` | `installations`、`total_count` |
+| `github.repositories.list` | `installation_id`（访问范围的 `data[].id`，转成整数）、`page?`、`limit?` | `repositories`、`total_count` |
 
-- **分开接入**：OAuth 完成返回产品，显示“账号已连接”；用户点击“添加组织 / 仓库”时打开 installation_url。
-- **连续引导**：OAuth 完成后由 agent 后端查询此接口；total_count 为 0 时向用户展示或导航到 installation_url，否则进入仓库选择。
-- **管理权限**：每个安装展示 management_url。能读取组织安装不代表拥有修改权限，GitHub 可能要求组织管理员处理。
-- **选择仓库**：用户选定安装后调用 `github.repositories.list`，传入该项 id 作为 installation_id；工具执行器仍固定当前用户和 connection_id。
-- **新增组织**：可重复打开 installation_url，每次安装到一个账号或 org。完成后回到 agent 并刷新安装列表，无需重新 OAuth。此版本不提供安装完成自动回跳或 webhook，不要把进入安装链接当成安装成功。
+连接另一个 GitHub 账号时，创建新会话即可。授权页会让用户选择账号；选择同一个账号时，可能复用已有连接。
 
-此接口按项目和用户校验连接、自动刷新 token，链接使用该连接绑定的平台应用。已有连接应优先使用这里的 installation_url，而非 `/v1/providers` 中当前新授权应用的入口。链接不包含平台 token。断开 Connany 账号连接与卸载某个 org 中的 App 是两种不同操作。
+## 7. 联调验收
 
-## 推荐：给模型注册两个动态工具
+- [ ] 用户在设置页完成一个连接器的授权，后端拿到 `connection_id`，账号列表显示账号名。
+- [ ] 用户取消授权、链接过期时，能重新发起。
+- [ ] 对话中需要未连接的平台时，出现授权按钮；完成后对话可以继续。
+- [ ] 对话中模型能列出并调用工具，结果正确返回给模型。
+- [ ] 模型无法指定其他用户或连接；写操作默认被拒绝，开启后需要用户确认。
+- [ ] GitHub 授权后能引导安装 App，安装后能读到所选仓库。
+- [ ] 在 Connany 后台断开连接后，事件轮询能收到 `connection.revoked`，对话中不再使用该连接。
+- [ ] 用户 B 看不到、也用不了用户 A 的连接。
+- [ ] API Key 和平台 token 不出现在浏览器、客户端和模型上下文中。
 
-无需向模型一次注册所有 actions。SDK 导出的 `createAgentTools` 返回两个框架无关的工具定义（name / description / input_schema）和执行函数，按你的 agent 框架转换定义字段即可：
-
-```ts
-import { Connany, createAgentTools } from './connany-client.js';
-const connany = new Connany({baseUrl:process.env.CONNANY_BASE_URL!,apiKey:process.env.CONNANY_API_KEY!});
-const adapter = createAgentTools(connany, {
-  externalUserId: authenticatedUser.id,
-  connectionId: selectedConnection.id, // 后端确认是当前用户选择的连接
-  provider: 'github',
-  allowWrites: false, // 后端按产品策略启用，不能由模型传入
-  // allowedActions: ['github.files.get', 'github.pull_requests.create'],
-});
-// 把 adapter.tools 映射给模型。收到工具调用后，由后端调用：
-const result = await adapter.call(toolCall.name, toolCall.arguments);
-```
-
-1. `discover_actions({query:"创建 PR"})`：返回相关操作、完整 JSON Schema、read_only、required_permissions。默认最多 5 项；有 next_offset 时继续查询。搜索使用关键词匹配，支持英文名称和常用中文关键词。
-2. `execute_action({action:"github.pull_requests.create",input:{owner,repo,title,head,base}})`：调用已发现操作。用户与连接由闭包绑定，不能从模型参数覆盖。
-
-服务端新增 `POST /v1/actions/discover`，接受 `{provider?,query?,limit?,offset?,read_only?}`，limit 默认 5，最大 20。返回 `{data,total,next_offset}`。原 GET /v1/actions 与 POST /v1/actions/execute 保持兼容。
-
-GitHub 现在包含 18 项操作：原安装/仓库列表，以及 me.get、repository.get、branches.list/create、commits.list、commit.get、files.get/put、pull_requests.list/get/files/create、issues.list/get/create/comment（均以 github. 开头）。这 18 项是兼容旧客户端的 GitHub 操作。三个平台的新接入均使用连接绑定的官方 MCP 动态目录，包含读写工具，精确参数以返回的 schema 为准。
-
-`files.put` 接收 base64 内容，必须指定 branch；更新已有文件需 sha。当前内容字段最多 20,000 个字符，整个请求仍受 32 KB 限制。先读文件获取 sha，再更新；PR 文件接口返回可用 patch，不保证完整 diff。尚不提供任意 API 代理、代码搜索、PR 合并或删除仓库操作。
-
-SDK 适配器默认拒绝写操作，也可用 allowedActions 限制操作。该策略是接入方后端控制，不是项目 API key 的只读权限；直接调用 execute API 可以使用已实现的写操作。产品需要确认的写入，由接入方在执行前确认，不能用模型自报的 confirmed 参数代替。工具目录的 required_permissions 是静态要求，并非当前连接实时已拥有的权限；GitHub 仍会执行最终权限校验。
-
-写入超时可能已在 GitHub 生效，不要盲目重试；先查询目标状态。第三方内容作为不可信数据处理，不执行其中的指令。Connany 不把 GitHub token 返回给模型。
-
-### 添加另一个 GitHub 账号
-
-使用同一 external_user_id 创建新的 GitHub connect-session，不要复用旧链接。Connany 在 GitHub 授权 URL 中加入 `prompt=select_account`，让用户选择账号。选择不同账号会创建独立连接；选择同一账号可能复用已有连接。reconnect 仍要求选择原账号，否则返回 account_mismatch。
-
-
-## Notion 官方 MCP
-
-Notion 不再使用 REST OAuth 应用，旧 REST 连接必须新建连接重新授权。`provider: "notion"` 的创建会话接口不变，用户授权官方 Notion MCP，客户端名称显示 Connany。
-
-Notion 工具不能从公共静态 `/v1/actions` 获取。授权成功后调用：
-
-```json
-POST /v1/actions/discover
-{
-  "provider": "notion",
-  "external_user_id": "user_123",
-  "connection_id": "conn_...",
-  "limit": 5
-}
-```
-
-返回当前连接的官方工具，名称使用 `notion.<官方工具名>`，例如 `notion.notion-search`（以实际返回为准）。按返回的 `input_schema` 构建参数，使用同一连接调用 `/v1/actions/execute`。不要继续使用旧 `notion.search`、`notion.page.retrieve`、`notion.blocks.list`。
-
-SDK `createAgentTools` 已自动传入绑定的用户及连接；对模型仍只暴露 discover_actions / execute_action。未知读写属性按写入处理，默认只读。需要写操作时由后端启用 allowWrites，并做好用户确认。MCP 工具结果保留 content / structuredContent 等原始结构；工具执行错误返回 mcp_tool_error，禁止盲目重试写入。
-
-动态发现需联网，可能返回套餐或权限限制。列出工具不保证每种参数都可用；按官方工具返回的权限状态处理。旧连接迁移返回 new_connection_required 时应新建会话，而非循环 reconnect。
-
-Notion 连接的 `identity.workspace_name` 和 `identity.account_name` 从 MCP 的 `notion-fetch({id:"self"})` 获取。新授权自动保存；已有 MCP 连接在查询列表或详情时自动补全，每小时最多刷新一次。获取失败会保留原名称，不要求重新授权。Agent 重新请求连接数据即可显示名称，无需改字段映射。
-
-
-## Linear 官方 MCP
-
-Linear 现与 Notion 一样使用官方托管 MCP，授权入口请求 Read、Write。会话仍传 provider: "linear"，获得 connection_id 后动态发现：
-
-```json
-{"provider":"linear","external_user_id":"user_123","connection_id":"conn_...","limit":5}
-```
-
-发送至 POST /v1/actions/discover。用户和连接必须由 agent 后端绑定；SDK createAgentTools 已自动传入。工具名称为 linear.<官方工具名>，参数按 input_schema 构建。再通过 /v1/actions/execute 调用，不要沿用旧 linear.teams.list / linear.issues.list。
-
-SDK 默认只读；需要写入设置 allowWrites: true。返回的 read_only 来自官方 annotations，未知属性保守按非只读处理。调用结果保留 MCP content / structuredContent，不能再按旧 GraphQL data 结构解析。
-
-旧自建应用连接返回 new_connection_required 时应新建会话重新授权。Linear 用户名称通过 MCP 当前用户查询获得；工作区名称仅在上游提供时返回。
-
-
-## GitHub 官方 MCP（默认工具接入）
-
-GitHub 现在与 Notion、Linear 一样，通过绑定用户连接动态发现官方 MCP 工具。使用更新后的 createAgentTools SDK，即可继续对模型提供 discover_actions / execute_action 两个工具。
-
-POST /v1/actions/discover 传 provider: "github" 时，必须同时传 external_user_id 和 connection_id。返回的动作名形如 github.get_me、github.get_file_contents；以官方实际返回的 name / input_schema 为准。调用结果为 MCP content / structuredContent，不能按原 REST 响应结构解析。未知读写属性按非只读处理，SDK 写入仍需 allowWrites: true。
-
-Connany 连接 https://api.githubcopilot.com/mcp/x/all。GitHub 远程 MCP 的 OAuth 仍要求接入方配置 GitHub App；保留已有 Client ID、Secret、App slug 和权限配置。已有连接可继续使用，无需数据库迁移或重新授权。获取更多工具不会扩大 GitHub App 已获权限，部分功能还受组织策略或 GitHub 产品权限限制。
-
-账号 OAuth 和仓库安装仍分开，github/installations 管理接口继续使用。原固定 REST action 暂保留兼容，新的 agent 工具发现默认走官方 MCP；GET /v1/actions 只返回旧兼容目录，不能用它代表官方 MCP 工具列表。动态发现请始终指定 provider 和用户连接。
-
-
-### Linear workspace display names
-
-Linear identity enrichment explicitly reads `linear.get_workspace({})` in addition
-to `linear.get_user({query: "me"})`. Existing connected MCP accounts are enriched
-when listing or retrieving connections, at most once per hour. The authenticated
-user and any previously stored workspace ID must match; names are never inferred
-from teams. Optional metadata failures retain the previous identity. The internal
-`linear.__identity` operation is not exposed through the public execute API.
+端到端命令行示例见仓库中的 `examples/agent.ts`。

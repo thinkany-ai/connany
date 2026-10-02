@@ -9,9 +9,9 @@ const e=encodeURIComponent;
 const base=(i:any)=>`/repos/${e(i.owner)}/${e(i.repo)}`;
 const query=(values:Record<string,unknown>)=>new URLSearchParams(Object.entries(values).filter(([,v])=>v!==undefined).map(([k,v])=>[k,String(v)])).toString();
 const list=(i:any)=>query({page:i.page,per_page:i.limit,state:i.state,sha:i.sha});
-type Operation={provider:'github';description:string;keywords:string;read_only:boolean;required_permissions:string[];schema:z.ZodObject;request:(i:any)=>{path:string;method?:string;body?:unknown}};
-const op=(description:string,keywords:string,permissions:string[],shape:z.ZodRawShape,request:Operation['request'],readOnly=true):Operation=>({provider:'github',description,keywords,read_only:readOnly,required_permissions:permissions,schema:z.object(shape).strict(),request});
-export const githubActions={
+type Operation={connector:'github';description:string;keywords:string;read_only:boolean;required_permissions:string[];schema:z.ZodObject;request:(i:any)=>{path:string;method?:string;body?:unknown}};
+const op=(description:string,keywords:string,permissions:string[],shape:z.ZodRawShape,request:Operation['request'],readOnly=true):Operation=>({connector:'github',description,keywords,read_only:readOnly,required_permissions:permissions,schema:z.object(shape).strict(),request});
+export const githubRestTools={
  'github.me.get':op('Get the authenticated GitHub user.','用户 我 身份 profile',['None'],{},()=>({path:'/user'})),
  'github.repository.get':op('Get repository metadata.','仓库 详情',['Metadata: read'],repo,i=>({path:base(i)})),
  'github.branches.list':op('List repository branches.','分支 列表',['Contents: read'],{...repo,...paging},i=>({path:`${base(i)}/branches?${list(i)}`})),

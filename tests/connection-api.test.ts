@@ -14,7 +14,7 @@ test('connection check preserves ownership and upstream errors without executing
   getConnection:async(p:string,u:string,id:string)=>{
    assert.equal(p,'project');
    if(u!=='alice'||id!=='conn')throw new AppError('not_found','Connection not found.',404);
-   return {id,provider:'notion'};
+   return {id,connector:'notion'};
   },
   execute:async(...args:unknown[])=>{
    calls++;assert.deepEqual(args,['project','alice','conn','notion.__discover',{}]);
@@ -25,28 +25,52 @@ test('connection check preserves ownership and upstream errors without executing
  const check=(user:string)=>app.request('/v1/connections/conn/check',post({external_user_id:user}));
  assert.equal((await check('bob')).status,404);assert.equal(calls,0);
  const result=await check('alice');assert.equal(result.status,200);
- const data=await result.json();assert.equal(data.tool_count,1);assert.equal(data.provider,'notion');assert(data.request_id);assert(Number.isFinite(Date.parse(data.checked_at)));
+ const data=await result.json();assert.equal(data.tool_count,1);assert.equal(data.connector,'notion');assert(data.request_id);assert(Number.isFinite(Date.parse(data.checked_at)));
  expired=true;const denied=await check('alice');assert.equal(denied.status,409);assert.equal((await denied.json()).error.code,'reauth_required');
- const invalid=await app.request('/v1/connections/conn/check',post({external_user_id:'alice',provider:'github'}));assert.equal(invalid.status,400);assert.equal(calls,2);
+ const invalid=await app.request('/v1/connections/conn/check',post({external_user_id:'alice',connector:'github'}));assert.equal(invalid.status,400);assert.equal(calls,2);
 });
 
-test('exact MCP tool is discoverable beyond the first twenty related descriptions',async()=>{
+test('exact catalog tool is found beyond the first twenty related descriptions and called through the connection',async()=>{
  let executed=false;
- const tools=Array.from({length:30},(_,i)=>({name:`github.a${i}`,provider:'github',description:'Related to github.target',read_only:true,input_schema:{},required_permissions:[]}));
+ const tools=Array.from({length:30},(_,i)=>({name:`github.a${i}`,connector:'github',description:'Related to github.target',read_only:true,input_schema:{},required_permissions:[]}));
  tools.push({...tools[0],name:'github.target',description:'Target'});
- const app=createApp({initialize:async()=>{},authenticate:async()=>({id:'project'}),execute:async(p:string,u:string,c:string,a:string)=>{
+ const app=createApp({initialize:async()=>{},authenticate:async()=>({id:'project'}),connectorStore:{catalog:async()=>tools},getConnection:async(_p:string,_u:string,c:string)=>({id:c,connector:'github',status:'connected'}),execute:async(p:string,u:string,c:string,a:string)=>{
   assert.deepEqual([p,u,c],['project','alice','conn']);
-  if(a==='github.__discover')return tools;
   assert.equal(a,'github.target');executed=true;return {ok:true};
  }} as unknown as Service);
  const client=new Connany({baseUrl:'https://connany.example',apiKey:'test',fetch:async(url,init)=>app.request(String(url),init)});
- await createAgentTools(client,{externalUserId:'alice',connectionId:'conn',provider:'github'}).call('execute_action',{action:'github.target',input:{}});
+ await createAgentTools(client,{externalUserId:'alice',connectionId:'conn',connector:'github'}).call('call_tool',{tool:'github.target',input:{}});
  assert(executed);
 });
 
-test('connection filter validation rejects unknown providers and statuses before database access',async()=>{
+test('connection filter validation rejects unknown runtime and statuses before database access',async()=>{
  let queries=0;
  const app=createApp({initialize:async()=>{},authenticate:async()=>({id:'p'}),pool:{query:async()=>{queries++;return {rows:[]};}}} as unknown as Service);
- for(const filter of ['provider=unknown','status=healthy','limit=101'])assert.equal((await app.request('/v1/connections?external_user_id=alice&'+filter)).status,400);
+ for(const filter of ['connector=unknown','status=healthy','limit=101'])assert.equal((await app.request('/v1/connections?external_user_id=alice&'+filter)).status,400);
  assert.equal(queries,0);
+});
+
+test('connectors list only enabled connectors with title and public avatar',async()=>{
+ const app=createApp({initialize:async()=>{},authenticate:async()=>({id:'project'}),runtime:{config:{publicBaseUrl:'https://connany.example'}},connectorStore:{list:async()=>[
+  {name:'notion',enabled:true},{name:'github',enabled:true,installation_url:'https://github.com/apps/demo/installations/new'},{name:'linear',enabled:false},
+ ]}} as unknown as Service);
+ const body=await (await app.request('/v1/connectors')).json() as any;
+ assert.deepEqual(body.data,[
+  {name:'notion',title:'Notion',avatar_url:'https://connany.example/connectors/notion/avatar.svg'},
+  {name:'github',title:'GitHub',avatar_url:'https://connany.example/connectors/github/avatar.svg'},
+ ]);
+ const avatar=await app.request('/connectors/linear/avatar.svg');
+ assert.equal(avatar.status,200);assert.equal(avatar.headers.get('Content-Type'),'image/svg+xml');assert((await avatar.text()).startsWith('<svg'));
+ assert.equal((await app.request('/connectors/unknown/avatar.svg')).status,400);
+});
+
+test('connector sessions read the connector from the path',async()=>{
+ const created:any[]=[];
+ const app=createApp({initialize:async()=>{},authenticate:async()=>({id:'project'}),createSession:async(_p:unknown,input:any)=>{created.push(input);return {id:'cs_1',connector:input.connector};}} as unknown as Service);
+ assert.equal((await app.request('/v1/connectors/linear/sessions',post({external_user_id:'u'}))).status,201);
+ assert.equal((await app.request('/v1/connectors/unknown/sessions',post({external_user_id:'u'}))).status,404);
+ assert.equal((await app.request('/v1/connectors/linear/sessions',post({external_user_id:'u',connector:'notion'}))).status,400);
+ assert.deepEqual(created.map(i=>i.connector),['linear']);
+ const client=new Connany({baseUrl:'https://connany.example',apiKey:'key',fetch:async(url,init)=>app.request(String(url),init)});
+ assert.equal((await client.createSession('github',{external_user_id:'u'})).connector,'github');
 });

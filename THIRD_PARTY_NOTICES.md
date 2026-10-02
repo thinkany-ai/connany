@@ -2,11 +2,11 @@
 
 Connany source code is licensed under MIT. Third-party packages retain their own licenses, available in their distributions and package metadata.
 
-## Provider marks
+## Connector marks
 
 Notion, GitHub and Linear names and logos belong to their respective owners and are used to identify integrations. No affiliation or endorsement is implied. The Connany license does not grant rights to these trademarks.
 
-- Notion and GitHub SVG icons in `src/providers/catalog.ts`: sourced from [LobeHub Icons](https://github.com/lobehub/lobe-icons), under the MIT license reproduced below.
+- Notion and GitHub SVG icons in `src/connectors/catalog.ts`: sourced from [LobeHub Icons](https://github.com/lobehub/lobe-icons), under the MIT license reproduced below.
 - Linear SVG logomark: sourced from [Linear Brand Guidelines](https://linear.app/brand), `Linear-Brand-Assets.zip?v=3`, `logo-dark.svg`. It remains subject to Linear's brand usage terms.
 
 ## LobeHub Icons license
