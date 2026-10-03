@@ -14,7 +14,7 @@ import type { ToolDefinition } from './connector-store.js';
 import { mountAdmin } from './admin/routes.js';
 import { id } from './crypto.js';
 import { returnUrlSchema } from './projects.js';
-import { connectorCatalog, connector as connectorSpec } from './connectors/catalog.js';
+import { categoryTitles, connectorCatalog, connectorCategories, connector as connectorSpec, locales, pickLocale, type ConnectorDefinition } from './connectors/catalog.js';
 
 const userSchema = z.string().min(1).max(200);
 const sessionInput = z.object({ external_user_id: userSchema, return_url: returnUrlSchema.optional() }).strict();
@@ -76,7 +76,14 @@ export function createApp(service: Service) {
   });
   app.get('/v1/connectors', async c => {
     const base = service.runtime.config.publicBaseUrl;
-    return c.json({ data: (await service.connectorStore.in(c.get('project').workspace_id).list()).filter(item => item.enabled).map(item => ({ name: item.name, title: connectorCatalog[item.name].label, description: connectorCatalog[item.name].description, avatar_url: `${base}/connectors/${item.name}/avatar.svg`, tools_synced_at: item.tools_synced_at })) });
+    const { lang } = z.object({ lang: z.enum(locales).optional() }).strict().parse(c.req.query());
+    const locale = pickLocale(lang, c.req.header('Accept-Language'));
+    const enabled = (await service.connectorStore.in(c.get('project').workspace_id).list()).filter(item => item.enabled);
+    const data = enabled.map(item => { const spec = connectorCatalog[item.name] as ConnectorDefinition; return { name: item.name, title: spec.label, category: spec.category, description: spec.description[locale], avatar_url: `${base}/connectors/${item.name}/avatar.svg`, tools_synced_at: item.tools_synced_at }; });
+    // Only categories that contain an enabled connector, in display order.
+    const categories = connectorCategories.filter(category => data.some(item => item.category === category)).map(name => ({ name, title: categoryTitles[name][locale] }));
+    c.header('Content-Language', locale); c.header('Vary', 'Accept-Language');
+    return c.json({ categories, data });
   });
   app.post('/v1/connectors/:name/sessions', async c => {
     const connector = z.enum(connectorNames).safeParse(c.req.param('name'));

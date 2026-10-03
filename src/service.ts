@@ -128,7 +128,9 @@ export class Service {
           if (s.reconnect_id) {
             existing = await this.getConnection(s.project_id, s.external_user_id, s.reconnect_id, db, true);
             if (existing.status === 'revoked') throw new AppError('connection_revoked', 'Create a new connection after disconnecting.');
-            if (existing.identity.account_id !== identity.account_id || existing.identity.workspace_id !== identity.workspace_id) throw new AppError('account_mismatch', 'Reconnect with the original account and workspace.');
+            // Unverified identities (no userinfo or claims upstream) cannot be compared.
+            const comparable = !existing.identity.unverified && !identity.unverified;
+            if (comparable && (existing.identity.account_id !== identity.account_id || existing.identity.workspace_id !== identity.workspace_id)) throw new AppError('account_mismatch', 'Reconnect with the original account and workspace.');
           } else {
             const result = await db.query(`SELECT * FROM connections WHERE project_id=$1 AND external_user_id=$2 AND connector=$3 AND status <> 'revoked' AND identity->>'account_id'=$4 AND COALESCE(identity->>'workspace_id','')=$5 AND connector_app_id IS NOT DISTINCT FROM $6 FOR UPDATE`, [s.project_id, s.external_user_id, s.connector, identity.account_id, identity.workspace_id || '', s.connector_app_id]);
             existing = result.rows[0];

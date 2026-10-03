@@ -18,10 +18,25 @@ let rejectRefresh = false;
 let failRevoke = false;
 let tokenRevocations = 0;
 let seenSecrets: string[] = [];
+const vercelTokenRequests: Record<string, string>[] = [];
 const fetcher: typeof fetch = async (url, init) => {
   const u = String(url); const body = String(init?.body || '');
   const headers = new Headers(init?.headers);
   seenSecrets.push(headers.get('Authorization') || '');
+  // A hosted MCP server whose authorization server lives elsewhere and issues confidential clients.
+  if (u === 'https://api.vercel.com/login/oauth/register') return Response.json({ client_id: 'vercel-client', client_secret: 'vercel-secret', token_endpoint_auth_method: 'client_secret_post' });
+  if (u === 'https://api.vercel.com/login/oauth/token') {
+    const fields = Object.fromEntries(new URLSearchParams(body)); vercelTokenRequests.push(fields);
+    if (fields.client_secret !== 'vercel-secret' || fields.resource !== 'https://mcp.vercel.com/') return Response.json({ error: 'invalid_client' }, { status: 401 });
+    return Response.json({ access_token: 'vercel-access', refresh_token: 'vercel-refresh', expires_in: 3600 });
+  }
+  if (u === 'https://api.vercel.com/login/oauth/userinfo') return Response.json({ sub: 'vercel-user', name: 'Vercel Alice', email: 'alice@example.com' });
+  if (u === 'https://mcp.vercel.com/') {
+    const rpc = JSON.parse(body);
+    if (rpc.method === 'notifications/initialized') return new Response(null, { status: 202 });
+    const result = rpc.method === 'initialize' ? { protocolVersion: '2025-06-18' } : rpc.method === 'tools/list' ? { tools: [{ name: 'list_projects', inputSchema: { type: 'object' }, annotations: { readOnlyHint: true } }] } : { content: [{ type: 'text', text: 'projects' }] };
+    return Response.json({ jsonrpc: '2.0', id: rpc.id, result });
+  }
   if ((u === 'https://mcp.notion.com/token' || u === 'https://mcp.linear.app/token') && !new URLSearchParams(body).has('grant_type')) { tokenRevocations++; return Response.json({}, {status:failRevoke?503:200}); }
   if (u === 'https://mcp.notion.com/mcp' || u === 'https://mcp.linear.app/mcp') {
     if(JSON.parse(body).method==='tools/call' && JSON.parse(body).params.name==='get_user')return Response.json({jsonrpc:'2.0',id:JSON.parse(body).id,result:{content:[{type:'text',text:JSON.stringify({id:'linear-user',name:'Alice'})}]}});
@@ -265,4 +280,20 @@ test('connection tools come from the catalog and stay scoped to the owner and co
   assert.equal((await pool.query('SELECT 1 FROM connector_tools WHERE connector=$1', ['notion'])).rowCount, 1);
   await api(`/v1/connections/${flow.id}?external_user_id=tools-user`, 'DELETE');
   assert.equal((await api(`/v1/connections/${flow.id}/tools?external_user_id=tools-user`)).status, 409);
+});
+
+test('a hosted MCP connector with a separate authorization server and confidential client completes the full flow', async () => {
+  await pool.query("INSERT INTO admin_users(id,email,password_hash) VALUES('admin_vercel','vercel-admin@example.com','x') ON CONFLICT DO NOTHING");
+  await service.connectorStore.in('ws_default').saveMcp('vercel', true, 'admin_vercel');
+  const app = (await pool.query("SELECT * FROM connector_apps WHERE connector='vercel'")).rows[0];
+  assert.equal(app.client_id, 'vercel-client'); assert.equal(app.settings.token_endpoint_auth_method, 'client_secret_post');
+  assert(!app.secret_ciphertext.includes('vercel-secret'));
+  const flow = await connect('vercel', 'vercel-user-1');
+  const connection = await (await api(`/v1/connections/${flow.id}?external_user_id=vercel-user-1`)).json() as any;
+  assert.equal(connection.connector, 'vercel'); assert.equal(connection.identity.account_id, 'vercel-user'); assert.equal(connection.identity.account_name, 'Vercel Alice');
+  const tools = await (await api(`/v1/connections/${flow.id}/tools?external_user_id=vercel-user-1`)).json() as any;
+  assert.deepEqual(tools.data.map((t: any) => t.name), ['vercel.list_projects']);
+  const call = await api(`/v1/connections/${flow.id}/tools/vercel.list_projects/call`, 'POST', { external_user_id: 'vercel-user-1', input: {} });
+  assert.equal(call.status, 200); assert.equal(((await call.json()) as any).data.content[0].text, 'projects');
+  assert(vercelTokenRequests.length > 0 && vercelTokenRequests.every(fields => fields.client_secret === 'vercel-secret' && fields.client_id === 'vercel-client'));
 });

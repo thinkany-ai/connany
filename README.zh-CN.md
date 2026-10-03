@@ -6,7 +6,7 @@
 
 Connany 是面向 Agent 产品的开源多租户连接器服务。统一管理用户授权、连接和凭证，Agent 后端通过 REST API 或 TypeScript SDK 列出工具、操作已授权数据，无需接触平台 token。
 
-支持 **Notion MCP、GitHub App + MCP、Linear MCP**。MCP 是上游接入方式；Connany 当前对 Agent 提供 REST API 和 SDK，不是通用 MCP Server 托管平台。
+内置 25 个连接器：**Notion、GitHub（App + MCP）、Linear**，以及 Sentry、PostHog、Atlassian、Vercel、Supabase、Neon、Netlify、GitLab、Cloudflare、Prisma、Stripe、PayPal、Square、ClickUp、monday.com、Airtable、Todoist、Miro、Canva、Intercom、Webflow、Wix 的官方托管 MCP。MCP 是上游接入方式；Connany 当前对 Agent 提供 REST API 和 SDK，不是通用 MCP Server 托管平台。
 
 ## 功能
 
@@ -48,6 +48,7 @@ npm run dev   # 或：make dev
 | Notion | 后台一键启用官方 MCP，自动注册 OAuth 客户端 | 页面、数据库、工作区搜索 |
 | GitHub | 后台配置 GitHub App 的 Client ID、Client Secret、App slug | 仓库、Issue、Pull Request 等官方 MCP 工具 |
 | Linear | 后台一键启用官方 MCP，自动注册 OAuth 客户端 | Issue、项目、团队协作 |
+| 其他 22 个托管 MCP | 与 Notion、Linear 相同：后台一键启用，自动注册 OAuth 客户端 | 错误监控、产品分析、部署、数据库、支付、项目管理、设计、客服与建站 |
 
 启用连接器后，在卡片上点一次「同步工具目录」：上游 MCP 只向已登录用户提供工具列表，所以用你自己的账号授权一次，Connany 只保存工具定义。用户仍需授权自己的账号；GitHub 仓库访问还需要安装 App 并选择仓库。详见 [连接器配置](docs/connector-setup.md)。
 

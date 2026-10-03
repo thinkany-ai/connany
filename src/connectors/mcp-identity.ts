@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { AppError, UpstreamError } from '../errors.js';
 import type { HostedMcp } from './hosted-mcp.js';
 import type { Credentials } from './index.js';
@@ -61,4 +62,29 @@ export async function notionIdentity(mcp: HostedMcp, credential: Credentials, ex
     if (workspaceName || accountName) return {...(workspaceName?{workspace_name:workspaceName}:{}),...(accountName?{account_name:accountName}:{})};
   }
   throw new UpstreamError('notion_identity_unavailable');
+}
+
+/** Claims of a JWT without verification; only used to name the account the token was issued for. */
+function jwtClaims(token: unknown): Record<string, unknown> {
+  if (typeof token !== 'string' || token.split('.').length !== 3) return {};
+  try { const claims = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8')); return claims && typeof claims === 'object' ? claims : {}; } catch { return {}; }
+}
+/**
+ * Identity for hosted MCP connectors without a bespoke lookup. Sources in order of authority:
+ * OIDC userinfo, the id_token, user fields of the token response, then a JWT access token.
+ * Without any of them the connection still works but is marked unverified: it is never merged
+ * with another connection and reconnect cannot confirm the original account.
+ */
+export async function genericIdentity(mcp: HostedMcp, credential: Credentials, raw: any, label: string): Promise<Record<string, unknown> & {account_id: string; account_name: string}> {
+  let userinfo: Record<string, unknown> = {};
+  try { userinfo = await mcp.userinfo(credential) || {}; } catch (error) { if (error instanceof AppError && error.status === 401) throw error; }
+  const user = raw?.user && typeof raw.user === 'object' ? raw.user : {};
+  const sources: Record<string, unknown>[] = [userinfo, jwtClaims(raw?.id_token), { sub: raw?.user_id ?? user.id, name: user.name, email: user.email ?? raw?.email }, jwtClaims(credential.accessToken)];
+  const text = (value: unknown) => (typeof value === 'string' || typeof value === 'number') && String(value).trim() && String(value).length <= 500 ? String(value).trim() : undefined;
+  const pick = (...keys: string[]) => { for (const source of sources) for (const key of keys) { const value = text(source[key]); if (value) return value; } return undefined; };
+  const accountId = pick('sub', 'user_id', 'id', 'uid');
+  const email = pick('email');
+  const name = pick('name', 'full_name', 'preferred_username', 'nickname', 'username', 'login') || email;
+  if (accountId) return { account_id: accountId, account_name: name || accountId, ...(email ? { email } : {}), transport: 'mcp' };
+  return { account_id: `unverified_${randomUUID()}`, account_name: `${label} 账号`, unverified: true, transport: 'mcp' };
 }

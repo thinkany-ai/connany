@@ -5,7 +5,7 @@ import {serve} from '@hono/node-server';
 import pg from 'pg';
 import {randomBytes} from 'node:crypto';
 import {mkdir} from 'node:fs/promises';
-import {config} from '../support.js';
+import {config,connectorClients} from '../support.js';
 import {createApp} from '../../src/app.js';
 import {Service} from '../../src/service.js';
 import {ConnectorRuntime} from '../../src/connectors/index.js';
@@ -19,7 +19,7 @@ test('admin browser configures three shared connectors, creates two projects, ro
   const schema=`admin_browser_${randomBytes(8).toString('hex')}`;
   const owner=new pg.Pool({connectionString:process.env.TEST_DATABASE_URL});
   const pool=new pg.Pool({connectionString:process.env.TEST_DATABASE_URL,options:`-c search_path=${schema}`});
-  const settings={...config,connectors:{notion:{clientId:'',clientSecret:''},github:{clientId:'',clientSecret:''},linear:{clientId:'',clientSecret:''}}};
+  const settings={...config,connectors:connectorClients()};
   // Minimal hosted MCP: handshake plus an empty tool list for discovery.
   const mcp=(init?:RequestInit)=>{const body=JSON.parse(String(init?.body));if(!('id' in body))return new Response(null,{status:202});return Response.json({jsonrpc:'2.0',id:body.id,result:body.method==='initialize'?{protocolVersion:'2025-03-26',capabilities:{tools:{}}}:body.method==='tools/list'?{tools:[]}:{}});};
   const fake:typeof fetch=async(url,init)=>String(url).endsWith('/mcp')?mcp(init):String(url).endsWith('/register')?Response.json({client_id:'registered-client'}):String(url)==='https://mcp.notion.com/token'?Response.json({access_token:'token',refresh_token:'refresh',user_id:'alice',workspace_id:'workspace'}):String(url).endsWith('/oauth/token')?Response.json({access_token:'token',refresh_token:'refresh',workspace_id:'workspace',workspace_name:'Design workspace',bot_id:'bot',owner:{user:{id:'alice',name:'Alice'}}}):Response.json({results:[]});

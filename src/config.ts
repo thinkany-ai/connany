@@ -1,9 +1,10 @@
 import { z } from 'zod';
-import { connectorNames, type ConnectorName } from './connectors/catalog.js';
+import { connectorNames, type ClientAuthMethod, type ConnectorName } from './connectors/catalog.js';
 export { connectorNames, type ConnectorName };
 export interface Config {
   databaseUrl: string; publicBaseUrl: string; encryptionKey: string; port: number;
-  connectors: Record<ConnectorName, { clientId: string; clientSecret: string }>;
+  /** OAuth client per connector; authMethod is set for dynamically registered MCP clients. */
+  connectors: Record<ConnectorName, { clientId: string; clientSecret: string; authMethod?: ClientAuthMethod }>;
   githubAppSlug: string; githubVersion: string; notionVersion: string; linearScopes: string;
 }
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {

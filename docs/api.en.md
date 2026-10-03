@@ -23,7 +23,7 @@ Show connect_url to the user. They authorize in their browser while your backend
 
 | Concept | Description |
 | --- | --- |
-| Connector | A third-party integration supported by Connany, such as notion, github or linear. Administrators configure and enable connectors once; every project shares them |
+| Connector | A third-party integration supported by Connany, such as notion, github, linear or sentry. Administrators configure and enable connectors once; every project shares them |
 | Project | An agent product integrated with Connany. User connections, authorization sessions and events belong to a project |
 | API key | A credential for one project. A project can have up to 2 active keys, each revocable on its own |
 | User (external_user_id) | Your product's user ID, unique within a project: the same ID in different projects is a different user |
@@ -43,22 +43,36 @@ Timestamps are ISO 8601 strings. Nullable fields use null. X-Request-Id identifi
 
 `GET /v1/connectors`
 
-No parameters. Returns data containing only the connectors an administrator has enabled, ready to render as "connect an account" options. Each item contains name, title, avatar_url and tools_synced_at (when the tool catalog was last synced; null if never).
+Returns the connectors an administrator has enabled, with their categories, ready to render grouped "connect an account" options.
+
+| Query parameter | Type | Description |
+| --- | --- | --- |
+| lang | string, optional | Language of returned text: en or zh-CN. Without it the Accept-Language header decides; English otherwise |
 
 Request example:
 
 ```bash
-curl "$CONNANY_BASE_URL/v1/connectors" \
+curl "$CONNANY_BASE_URL/v1/connectors?lang=en" \
   -H "Authorization: Bearer $CONNANY_API_KEY"
 ```
 
 Response example:
 
 ```json
-{"data":[{"name":"notion","title":"Notion","avatar_url":"{{BASE_URL}}/connectors/notion/avatar.svg","tools_synced_at":"2026-09-26T10:00:00.000Z"},{"name":"github","title":"GitHub","avatar_url":"{{BASE_URL}}/connectors/github/avatar.svg","tools_synced_at":"2026-09-26T10:00:00.000Z"},{"name":"linear","title":"Linear","avatar_url":"{{BASE_URL}}/connectors/linear/avatar.svg","tools_synced_at":null}]}
+{"categories":[{"name":"collaboration","title":"Collaboration"},{"name":"development","title":"Code & deploy"},{"name":"analytics","title":"Monitoring & analytics"}],"data":[{"name":"notion","title":"Notion","category":"collaboration","description":"Pages, databases and workspace search","avatar_url":"{{BASE_URL}}/connectors/notion/avatar.svg","tools_synced_at":"2026-09-26T10:00:00.000Z"},{"name":"github","title":"GitHub","category":"development","description":"Repositories, issues and pull requests","avatar_url":"{{BASE_URL}}/connectors/github/avatar.svg","tools_synced_at":"2026-09-26T10:00:00.000Z"},{"name":"sentry","title":"Sentry","category":"analytics","description":"Errors, issues and performance","avatar_url":"{{BASE_URL}}/connectors/sentry/avatar.svg","tools_synced_at":null}]}
 ```
 
-Use name in the authorization session path /v1/connectors/{name}/sessions. Current names are notion, github and linear. A listed connector does not mean the user is connected. avatar_url points to a public SVG icon that can be used directly in an img tag.
+| Field | Description |
+| --- | --- |
+| categories | Categories that contain an enabled connector, in recommended display order. name is one of collaboration, development, data, analytics, payments or design; title follows the language |
+| data[].name | Connector name, used in the authorization session path /v1/connectors/{name}/sessions (such as notion, sentry or stripe; rely on this endpoint for the full list) |
+| data[].title | Brand name; not translated |
+| data[].category | Category, matching a name in categories |
+| data[].description | One-line summary in the requested language |
+| data[].avatar_url | Public SVG icon usable directly in an img tag |
+| data[].tools_synced_at | When the tool catalog was last synced; null if never |
+
+The Content-Language response header states the language used. A listed connector does not mean the user is connected.
 
 ## Create an authorization session
 
@@ -125,7 +139,7 @@ With a return_url, the browser is redirected there with connany_session_id when 
 | Query parameter | Type | Description |
 | --- | --- | --- |
 | external_user_id | string, required | Current user ID |
-| connector | string, optional | Connector name, such as notion / github / linear |
+| connector | string, optional | Connector name, such as notion / github / sentry |
 | status | string, optional | connected / reauth_required / revoked |
 | limit | integer, optional | 1–100; default 50 |
 | after | string, optional | Previous next_cursor |
@@ -335,7 +349,7 @@ Returns the tools every enabled connector offers, independent of users; only an 
 
 | Query parameter | Type | Description |
 | --- | --- | --- |
-| connector | string, optional | Only tools of one connector, such as notion / github / linear |
+| connector | string, optional | Only tools of one connector, such as notion / github / sentry |
 | query | string, optional | Search name or description; max 500 characters; exact names rank first |
 | read_only | string, optional | true: read-only; false: other tools; omitted: both |
 | limit | integer, optional | 1–100; default 20 |

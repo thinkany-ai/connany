@@ -84,9 +84,9 @@ export class ConnectorStore {
       const existing = (await db.query("SELECT a.* FROM connectors s JOIN connector_apps a ON a.id=s.active_app_id WHERE s.workspace_id=$1 AND s.name=$2",[this.workspaceId,name])).rows[0];
       let appId = existing?.settings?.transport === 'mcp' && existing.settings.callback_url === this.base.callback(name) ? existing.id : null;
       if (!appId && enabled) {
-        const clientId = await this.base.mcp(name).register(this.base.callback(name));
+        const client = await this.base.mcp(name).register(this.base.callback(name));
         appId = id('capp');
-        await db.query("INSERT INTO connector_apps(id,workspace_id,connector,client_id,secret_ciphertext,settings) VALUES($1,$2,$3,$4,$5,$6)", [appId,this.workspaceId,name,clientId,this.vault.seal('',this.context(appId)),JSON.stringify({transport:'mcp',callback_url:this.base.callback(name)})]);
+        await db.query("INSERT INTO connector_apps(id,workspace_id,connector,client_id,secret_ciphertext,settings) VALUES($1,$2,$3,$4,$5,$6)", [appId,this.workspaceId,name,client.clientId,this.vault.seal(client.clientSecret,this.context(appId)),JSON.stringify({transport:'mcp',callback_url:this.base.callback(name),token_endpoint_auth_method:client.authMethod})]);
       }
       await db.query("INSERT INTO connectors(workspace_id,name,active_app_id,enabled) VALUES($1,$2,$3,$4) ON CONFLICT(workspace_id,name) DO UPDATE SET active_app_id=EXCLUDED.active_app_id,enabled=EXCLUDED.enabled,updated_at=now()",[this.workspaceId,name,appId,enabled]);
       await db.query('INSERT INTO admin_audit(admin_id,action,target) VALUES($1,$2,$3)',[adminId,'connector.saved',name]);
@@ -134,7 +134,7 @@ export class ConnectorStore {
     if (!app) throw new AppError('connector_not_configured', 'OAuth app configuration not found.', 503);
     if (connectorSpec(name).auth === 'mcp' && app.settings.transport !== 'mcp') throw new AppError('reauth_required', 'Create a new MCP connection.', 409);
     const config: Config = { ...this.base.config, connectors: { ...this.base.config.connectors,
-      [name]: { clientId: app.client_id, clientSecret: this.vault.open<string>(app.secret_ciphertext, this.context(app.id)) } },
+      [name]: { clientId: app.client_id, clientSecret: this.vault.open<string>(app.secret_ciphertext, this.context(app.id)), authMethod: app.settings.token_endpoint_auth_method } },
       ...(name === 'github' ? { githubAppSlug: app.settings.github_app_slug } : {}) };
     return this.base.withConfig(config);
   }

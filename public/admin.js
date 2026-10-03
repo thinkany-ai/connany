@@ -232,6 +232,46 @@
   // Filters apply as soon as a selection changes; paging restarts from the first page.
   // API forms go through the submit handler above; plain GET filters navigate.
   document.querySelectorAll('form[data-auto-submit]').forEach(form => form.addEventListener('change', () => form.dataset.api ? form.requestSubmit() : form.submit()));
+  // Connectors page: status and category filters and name search, applied in place.
+  const connectorSearch = document.querySelector('[data-connector-search]');
+  if (connectorSearch) {
+    const statuses = [...document.querySelectorAll('[data-connector-status]')];
+    const categories = [...document.querySelectorAll('[data-connector-category]')];
+    const cards = [...document.querySelectorAll('[data-connector]')];
+    const stored = key => { try { return localStorage.getItem(key) || 'all'; } catch { return 'all'; } };
+    const valid = (buttons, attr, value) => buttons.some(b => b.dataset[attr] === value) ? value : 'all';
+    let status = valid(statuses, 'connectorStatus', stored('connany.connectorStatus'));
+    let category = valid(categories, 'connectorCategory', stored('connany.connectorCategory'));
+    // A link to a specific card (from the overview) shows everything so the card is visible.
+    if (location.hash.startsWith('#card-') || location.hash.startsWith('#connector-')) status = category = 'all';
+    const statusMatch = card => status === 'all' || (card.dataset.enabled === 'true') === (status === 'enabled');
+    const apply = () => {
+      const query = connectorSearch.value.trim().toLowerCase();
+      let shown = 0;
+      document.querySelectorAll('.connector-group').forEach(group => {
+        let visible = 0;
+        group.querySelectorAll('[data-connector]').forEach(card => {
+          const match = statusMatch(card) && (category === 'all' || card.dataset.category === category) && (!query || card.dataset.search.includes(query));
+          card.hidden = !match; if (match) visible++;
+        });
+        group.hidden = !visible; shown += visible;
+        group.querySelector('[data-group-count]').textContent = `${visible} 个`;
+      });
+      document.querySelector('[data-connector-empty]').hidden = shown > 0;
+      // Category counts follow the selected status so the chips stay truthful.
+      categories.forEach(c => {
+        const value = c.dataset.connectorCategory;
+        const count = cards.filter(card => statusMatch(card) && (value === 'all' || card.dataset.category === value)).length;
+        c.querySelector('span').textContent = count; c.classList.toggle('empty', !count);
+        c.setAttribute('aria-pressed', String(value === category));
+      });
+      statuses.forEach(s => s.setAttribute('aria-pressed', String(s.dataset.connectorStatus === status)));
+    };
+    statuses.forEach(s => s.addEventListener('click', () => { status = s.dataset.connectorStatus; try { localStorage.setItem('connany.connectorStatus', status); } catch {} apply(); }));
+    categories.forEach(c => c.addEventListener('click', () => { category = c.dataset.connectorCategory; try { localStorage.setItem('connany.connectorCategory', category); } catch {} apply(); }));
+    connectorSearch.addEventListener('input', apply);
+    apply();
+  }
   document.querySelectorAll('[data-copy-code]').forEach(button => button.addEventListener('click', async () => {
     const code = button.closest('.docs-code').querySelector('pre code');
     try { await navigator.clipboard.writeText(code.textContent); notify('已复制'); }

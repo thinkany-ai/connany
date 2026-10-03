@@ -23,7 +23,7 @@ curl "$CONNANY_BASE_URL/v1/connectors/notion/sessions" \
 
 | 概念 | 说明 |
 | --- | --- |
-| 连接器（connector） | Connany 支持的一个第三方平台集成，如 notion、github、linear。由管理员在后台配置并启用，所有项目共用 |
+| 连接器（connector） | Connany 支持的一个第三方平台集成，如 notion、github、linear、sentry。由管理员在后台配置并启用，所有项目共用 |
 | 项目（project） | 一个接入 Connany 的 agent 产品。用户连接、授权会话和事件都属于项目 |
 | API Key | 访问某个项目的凭证。一个项目最多 2 个有效 Key，可单独吊销 |
 | 用户（external_user_id） | 你的产品内的用户 ID，在项目内唯一：同一个 ID 在不同项目中是不同用户 |
@@ -43,22 +43,36 @@ JSON 请求使用 Content-Type: application/json，请求体上限 32 KB。每�
 
 `GET /v1/connectors`
 
-无参数。返回 data 数组，只包含管理员已启用的连接器，可直接用来渲染「连接账号」入口。每项包含 name、title、avatar_url 和 tools_synced_at（工具目录最近同步时间，尚未同步时为 null）。
+返回管理员已启用的连接器及其分类，可直接用来渲染分组的「连接账号」入口。
+
+| Query 参数 | 类型 | 说明 |
+| --- | --- | --- |
+| lang | string，可选 | 返回文字的语言：en 或 zh-CN。不传时按请求头 Accept-Language 选择，都没有时为英文 |
 
 请求示例：
 
 ```bash
-curl "$CONNANY_BASE_URL/v1/connectors" \
+curl "$CONNANY_BASE_URL/v1/connectors?lang=zh-CN" \
   -H "Authorization: Bearer $CONNANY_API_KEY"
 ```
 
 响应示例：
 
 ```json
-{"data":[{"name":"notion","title":"Notion","description":"页面、数据库与工作区搜索","avatar_url":"{{BASE_URL}}/connectors/notion/avatar.svg","tools_synced_at":"2026-09-26T10:00:00.000Z"},{"name":"github","title":"GitHub","description":"仓库、Issue 与 Pull Request","avatar_url":"{{BASE_URL}}/connectors/github/avatar.svg","tools_synced_at":"2026-09-26T10:00:00.000Z"},{"name":"linear","title":"Linear","description":"Issue、项目与团队协作","avatar_url":"{{BASE_URL}}/connectors/linear/avatar.svg","tools_synced_at":null}]}
+{"categories":[{"name":"collaboration","title":"协作与办公"},{"name":"development","title":"代码与部署"},{"name":"analytics","title":"监控与分析"}],"data":[{"name":"notion","title":"Notion","category":"collaboration","description":"页面、数据库与工作区搜索","avatar_url":"{{BASE_URL}}/connectors/notion/avatar.svg","tools_synced_at":"2026-09-26T10:00:00.000Z"},{"name":"github","title":"GitHub","category":"development","description":"仓库、Issue 与 Pull Request","avatar_url":"{{BASE_URL}}/connectors/github/avatar.svg","tools_synced_at":"2026-09-26T10:00:00.000Z"},{"name":"sentry","title":"Sentry","category":"analytics","description":"错误监控、Issue 与性能追踪","avatar_url":"{{BASE_URL}}/connectors/sentry/avatar.svg","tools_synced_at":null}]}
 ```
 
-name 用于创建授权会话的路径 /v1/connectors/{name}/sessions，目前可能是 notion、github、linear；列表出现某个连接器不代表用户已授权。description 是一句话的能力介绍，可用于连接入口。avatar_url 是无需鉴权的 SVG 图标，可直接用于 img 标签。
+| 字段 | 说明 |
+| --- | --- |
+| categories | 含有已启用连接器的分类，按推荐的展示顺序排列。name 取值 collaboration、development、data、analytics、payments、design；title 按语言返回 |
+| data[].name | 连接器名称，用于创建授权会话的路径 /v1/connectors/{name}/sessions（如 notion、sentry、stripe，完整列表以该接口返回为准） |
+| data[].title | 品牌名称，不随语言变化 |
+| data[].category | 所属分类，对应 categories 中的 name |
+| data[].description | 一句话的能力介绍，按语言返回 |
+| data[].avatar_url | 无需鉴权的 SVG 图标，可直接用于 img 标签 |
+| data[].tools_synced_at | 工具目录最近同步时间，尚未同步时为 null |
+
+响应头 Content-Language 为实际使用的语言。列表出现某个连接器不代表用户已授权。
 
 ## 创建授权会话
 
@@ -125,7 +139,7 @@ curl "$CONNANY_BASE_URL/v1/connectors/notion/sessions/cs_example?external_user_i
 | Query 参数 | 类型 | 说明 |
 | --- | --- | --- |
 | external_user_id | string，必填 | 当前用户 ID |
-| connector | string，可选 | 连接器名称，如 notion / github / linear |
+| connector | string，可选 | 连接器名称，如 notion / github / sentry |
 | status | string，可选 | connected / reauth_required / revoked |
 | limit | integer，可选 | 1–100，默认 50 |
 | after | string，可选 | 上一页 next_cursor |
@@ -335,7 +349,7 @@ API Key 本身不是只读密钥。写入控制由接入方后端实施，不能
 
 | Query 参数 | 类型 | 说明 |
 | --- | --- | --- |
-| connector | string，可选 | 只返回某个连接器的工具，如 notion / github / linear |
+| connector | string，可选 | 只返回某个连接器的工具，如 notion / github / sentry |
 | query | string，可选 | 搜索名称或描述，最长 500 字符，精确名称优先 |
 | read_only | string，可选 | true 只读；false 非只读；省略返回全部 |
 | limit | integer，可选 | 1–100，默认 20 |

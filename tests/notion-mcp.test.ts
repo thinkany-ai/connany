@@ -17,7 +17,7 @@ test('MCP registers exact callback with public client and exchanges codes with P
   assert.deepEqual(body.redirect_uris,['https://connany.example/oauth/notion/callback']);
   assert.equal(body.client_name,'Connany');return Response.json({client_id:'registered'});
  });
- assert.equal(await mcp.register('https://connany.example/oauth/notion/callback'),'registered');
+ assert.deepEqual(await mcp.register('https://connany.example/oauth/notion/callback'),{clientId:'registered',clientSecret:'',authMethod:'none'});
  const runtime=new ConnectorRuntime(config,async()=>Response.json({}, {status:503}));
  const identity=await runtime.identify('notion',{accessToken:'x'},{user_id:'u',workspace_id:'w'});
  assert.equal(identity.workspace_name,'Notion workspace');assert.equal(identity.account_id,'u');assert.equal(typeof identity.identity_checked_at,'string');
@@ -44,7 +44,7 @@ test('MCP handles initialization, paginated SSE tools, conservative write flags 
 });
 test('MCP fails closed on upstream auth errors and legacy app credentials',async()=>{
  const mcp=new NotionMcp(async()=>Response.json({error:'invalid_grant',secret:'hidden'},{status:400}));
- await assert.rejects(()=>mcp.token('client',{grant_type:'refresh_token',refresh_token:'secret'}),{code:'reauth_required',status:401});
+ await assert.rejects(()=>mcp.token({clientId:'client',clientSecret:'',authMethod:'none'},{grant_type:'refresh_token',refresh_token:'secret'}),{code:'reauth_required',status:401});
  const pool={query:async()=>({rows:[{id:'old',settings:{}}]})} as any;
  const store=new ConnectorStore(pool,new ConnectorRuntime(config),new Vault(config.encryptionKey));
  await assert.rejects(()=>store.resolve('notion','old'),{code:'reauth_required'});

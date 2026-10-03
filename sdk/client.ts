@@ -1,5 +1,7 @@
 /** Server-side SDK. Do not bundle the project key into a browser, mobile app or LLM prompt. */
-export type ConnectorName = 'notion' | 'github' | 'linear';
+/** Groups connectors for display: collaboration, development, data, analytics, payments, design. */
+export type ConnectorCategory = 'collaboration' | 'development' | 'data' | 'analytics' | 'payments' | 'design';
+export type ConnectorName = 'notion' | 'github' | 'linear' | 'sentry' | 'posthog' | 'atlassian' | 'vercel' | 'supabase' | 'neon' | 'netlify' | 'gitlab' | 'cloudflare' | 'prisma' | 'stripe' | 'paypal' | 'square' | 'clickup' | 'monday' | 'airtable' | 'todoist' | 'miro' | 'canva' | 'intercom' | 'webflow' | 'wix';
 export interface ConnectSession {
   id: string; connector: ConnectorName; status: 'pending' | 'authorizing' | 'processing' | 'connected' | 'error' | 'expired';
   expires_at: string; connect_url?: string; connection_id?: string | null; error_code?: string | null;
@@ -34,7 +36,10 @@ export class Connany {
     if (!response.ok) throw new ConnanyError(response.status, result.error?.code || 'request_failed', result.error?.message || 'Connany request failed.', result.request_id, result.error?.details);
     return result as T;
   }
-  connectors() { return this.request<{ data: { name: ConnectorName; title: string; description: string; avatar_url: string; tools_synced_at: string | null }[] }>('/v1/connectors'); }
+  /** Enabled connectors and their categories. Descriptions and category titles follow `lang` (default English). */
+  connectors(options: { lang?: 'en' | 'zh-CN' } = {}) {
+    return this.request<{ categories: { name: ConnectorCategory; title: string }[]; data: { name: ConnectorName; title: string; category: ConnectorCategory; description: string; avatar_url: string; tools_synced_at: string | null }[] }>(`/v1/connectors${options.lang ? `?${new URLSearchParams({ lang: options.lang })}` : ''}`);
+  }
   /** Tools the user can use now through an authorized connection. Use this in agent conversations. */
   listTools(connectionId: string, externalUserId: string, options: { query?: string; limit?: number; offset?: number; read_only?: boolean } = {}) {
     const query = new URLSearchParams({ external_user_id: externalUserId });

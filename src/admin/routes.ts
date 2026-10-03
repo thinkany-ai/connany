@@ -85,7 +85,13 @@ export function mountAdmin(root: Hono<any>, service: Service) {
     const connector = z.enum(connectorNames).parse(c.req.param('connector'));
     if (connectorSpec(connector).auth === 'mcp') {
       const input=z.object({enabled:z.boolean()}).strict().parse(await c.req.json());
-      await store(c).saveMcp(connector,input.enabled,c.get('admin').id);
+      try { await store(c).saveMcp(connector,input.enabled,c.get('admin').id); }
+      catch (error) {
+        // Registration happens on the connector's servers; show what they answered.
+        if (!(error instanceof AppError) || !error.details?.upstream_status) throw error;
+        const reason = [error.details.upstream_status, error.details.upstream_error, error.details.upstream_error_description].filter(Boolean).join(' · ');
+        throw new AppError('connector_registration_failed',`${connectorSpec(connector).label} 拒绝了客户端注册（${reason}）。`,502,error.details);
+      }
     } else {
       const body = await c.req.json();
       const toggle = z.object({enabled:z.boolean()}).strict().safeParse(body);

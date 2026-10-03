@@ -5,7 +5,7 @@
 
 Connany is an open-source, multi-tenant connector service for agent applications. It manages user authorization, connections, and credentials so your agent backend can list tools and work with authorized data through a REST API or TypeScript SDK, without handling provider tokens.
 
-It supports **Notion MCP, GitHub App + MCP, and Linear MCP**. MCP is used to connect to upstream services; Connany exposes a REST API and SDK to agents, rather than hosting general-purpose MCP servers.
+It ships with 25 connectors: **Notion, GitHub (App + MCP), Linear**, plus official hosted MCP servers for Sentry, PostHog, Atlassian, Vercel, Supabase, Neon, Netlify, GitLab, Cloudflare, Prisma, Stripe, PayPal, Square, ClickUp, monday.com, Airtable, Todoist, Miro, Canva, Intercom, Webflow and Wix. MCP is used to connect to upstream services; Connany exposes a REST API and SDK to agents, rather than hosting general-purpose MCP servers.
 
 ## Features
 
@@ -47,6 +47,7 @@ To use an existing database, set `DATABASE_URL` in `.env` and skip the Docker st
 | Notion | Enable official MCP in the console; OAuth client registration is automatic | Pages, databases, and workspace search |
 | GitHub | Configure a GitHub App’s Client ID, Client Secret, and App slug in the console | Repositories, issues, pull requests, and other official MCP tools |
 | Linear | Enable official MCP in the console; OAuth client registration is automatic | Issues, projects, and team collaboration |
+| 22 more hosted MCP servers | Same as Notion and Linear: enable in the console, registration is automatic | Error monitoring, analytics, deployments, databases, payments, project management, design, support and site builders |
 
 After enabling a connector, click **Sync tool catalog** on its card once: upstream MCP servers list tools only to signed-in users, so you authorize with your own account and Connany keeps only the tool definitions. Users must still authorize their own accounts. GitHub repository access also requires installing the App and selecting repositories. See the [connector setup guide (Chinese)](docs/connector-setup.md).
 

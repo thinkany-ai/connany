@@ -1,39 +1,72 @@
 import { AppError, UpstreamError } from '../errors.js';
 import type { Credentials, Fetcher } from './index.js';
-import { connector as definition, type ConnectorName } from './catalog.js';
+import { connector as definition, type ClientAuthMethod, type ConnectorName } from './catalog.js';
+
+export interface McpClient { clientId: string; clientSecret: string; authMethod: ClientAuthMethod }
 
 export class HostedMcp {
   constructor(private fetcher: Fetcher = fetch, private connector: ConnectorName = 'notion') {}
   private get spec() { return definition(this.connector).mcp; }
   private get origin() { return this.spec.origin; }
   private get endpoint() { return this.spec.endpoint || '/mcp'; }
+  /** OAuth endpoint: explicit from the catalog, or the legacy origin + path layout. */
+  oauthUrl(kind: 'authorize' | 'token' | 'register' | 'revoke' | 'userinfo'): string | undefined {
+    if (this.spec.oauth) return this.spec.oauth[kind];
+    const legacy: Record<string, string> = { authorize: '/authorize', token: '/token', register: '/register', revoke: '/token' };
+    return legacy[kind] ? this.origin + legacy[kind] : undefined;
+  }
   /** RFC 8707 resource indicator, when the connector requires one. */
-  get resource() { return this.spec.resource ? this.origin + this.endpoint : undefined; }
+  get resource() { return typeof this.spec.resource === 'string' ? this.spec.resource : this.spec.resource ? this.origin + this.endpoint : undefined; }
   private assertRegistrable() { if (definition(this.connector).auth !== 'mcp') throw new AppError('github_app_required','Configure a GitHub App for OAuth.'); }
   private async request(path: string, init: RequestInit) {
     let response: Response;
-    try { response = await this.fetcher(this.origin + path, { ...init, redirect: 'error', signal: AbortSignal.timeout(45000) }); }
+    try { response = await this.fetcher(/^https:\/\//.test(path) ? path : this.origin + path, { ...init, redirect: 'error', signal: AbortSignal.timeout(45000) }); }
     catch { throw new UpstreamError('upstream_unavailable'); }
     if (!response.ok) {
       const body = await response.json().catch(() => ({})) as any;
-      throw new UpstreamError(body.error === 'invalid_grant' ? 'reauth_required' : 'upstream_error', response.status === 401 || body.error === 'invalid_grant' ? 401 : response.status === 429 ? 429 : 502);
+      // OAuth error fields help administrators diagnose registration problems; they carry no secrets.
+      const describe = (value: unknown) => typeof value === 'string' ? value.slice(0, 300) : undefined;
+      throw new UpstreamError(body.error === 'invalid_grant' ? 'reauth_required' : 'upstream_error', response.status === 401 || body.error === 'invalid_grant' ? 401 : response.status === 429 ? 429 : 502,
+        { upstream_status: response.status, ...(describe(body.error) ? { upstream_error: describe(body.error) } : {}), ...(describe(body.error_description) ? { upstream_error_description: describe(body.error_description) } : {}) });
     }
     return response;
   }
-  async register(callback: string) {
+  /** RFC 7591 dynamic client registration. Servers without public clients return a secret to keep. */
+  async register(callback: string): Promise<McpClient> {
     this.assertRegistrable();
-    const response = await this.request('/register', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({client_name:'Connany',client_uri:new URL(callback).origin,redirect_uris:[callback],grant_types:['authorization_code','refresh_token'],response_types:['code'],token_endpoint_auth_method:'none'}) });
+    const method = this.spec.clientAuth || 'none';
+    const response = await this.request(this.oauthUrl('register')!, { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify({client_name:'Connany',client_uri:new URL(callback).origin,redirect_uris:[callback],grant_types:['authorization_code','refresh_token'],response_types:['code'],token_endpoint_auth_method:method,...(this.spec.scope?{scope:this.spec.scope}:{})}) });
     const result = await response.json() as any;
     if (typeof result.client_id !== 'string' || !result.client_id) throw new UpstreamError('invalid_client_registration');
-    return result.client_id as string;
+    const secret = typeof result.client_secret === 'string' ? result.client_secret : '';
+    if (method !== 'none' && !secret) throw new UpstreamError('invalid_client_registration');
+    const granted = result.token_endpoint_auth_method;
+    return { clientId: result.client_id, clientSecret: secret, authMethod: secret ? (granted === 'client_secret_basic' || granted === 'client_secret_post' ? granted : method === 'none' ? 'client_secret_post' : method) : 'none' };
   }
-  async token(clientId: string, fields: Record<string,string>) {
-    this.assertRegistrable();
-    return (await this.request('/token', {method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({...fields,client_id:clientId,...(this.resource?{resource:this.resource}:{})})})).json();
+  /** Token endpoint request with the client authentication chosen at registration. */
+  private clientRequest(url: string, client: McpClient, fields: Record<string,string>) {
+    const headers: Record<string,string> = {'Content-Type':'application/x-www-form-urlencoded',Accept:'application/json'};
+    const body = new URLSearchParams(fields);
+    if (client.authMethod === 'client_secret_basic') headers.Authorization = `Basic ${Buffer.from(`${encodeURIComponent(client.clientId)}:${encodeURIComponent(client.clientSecret)}`).toString('base64')}`;
+    else { body.set('client_id', client.clientId); if (client.authMethod === 'client_secret_post') body.set('client_secret', client.clientSecret); }
+    return this.request(url, {method:'POST',headers,body});
   }
-  async revoke(clientId: string, credential: Credentials) {
+  async token(client: McpClient, fields: Record<string,string>) {
     this.assertRegistrable();
-    await this.request('/token', {method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({client_id:clientId,token:credential.refreshToken || credential.accessToken,token_type_hint:credential.refreshToken?'refresh_token':'access_token'})});
+    return (await this.clientRequest(this.oauthUrl('token')!, client, {...fields,...(this.resource?{resource:this.resource}:{})})).json();
+  }
+  async revoke(client: McpClient, credential: Credentials) {
+    this.assertRegistrable();
+    const url = this.oauthUrl('revoke');
+    // Servers without a revocation endpoint only lose the local credential.
+    if (!url) return;
+    await this.clientRequest(url, client, {token:credential.refreshToken || credential.accessToken,token_type_hint:credential.refreshToken?'refresh_token':'access_token'});
+  }
+  /** OIDC userinfo, when the authorization server offers it. Used only to name the account. */
+  async userinfo(credential: Credentials): Promise<Record<string, unknown> | undefined> {
+    const url = this.oauthUrl('userinfo');
+    if (!url) return undefined;
+    return (await this.request(url, {method:'GET',headers:{Authorization:`Bearer ${credential.accessToken}`,Accept:'application/json'}})).json() as Promise<Record<string, unknown>>;
   }
   private async session(credential: Credentials) {
     let sessionId: string | null = null;
@@ -76,7 +109,7 @@ export class HostedMcp {
       } finally { await reader.cancel().catch(()=>{}); }
     };
     const initialized=await rpc('initialize',{protocolVersion:protocol,capabilities:{},clientInfo:{name:'connany',version:'0.1.0'}});
-    if (!['2024-11-05','2025-03-26','2025-06-18'].includes(initialized.protocolVersion)) throw new UpstreamError('unsupported_mcp_version');
+    if (!['2024-11-05','2025-03-26','2025-06-18','2025-11-25'].includes(initialized.protocolVersion)) throw new UpstreamError('unsupported_mcp_version');
     protocol=initialized.protocolVersion;
     await rpc('notifications/initialized',{},true);
     return rpc;

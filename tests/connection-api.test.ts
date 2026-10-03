@@ -50,15 +50,22 @@ test('connection filter validation rejects unknown runtime and statuses before d
  assert.equal(queries,0);
 });
 
-test('connectors list only enabled connectors with title, description and public avatar',async()=>{
+test('connectors list only enabled connectors with localized descriptions, their categories and a public avatar',async()=>{
  const app=createApp({initialize:async()=>{},authenticate:async()=>({id:'project'}),runtime:{config:{publicBaseUrl:'https://connany.example'}},connectorStore:{in(){return this},list:async()=>[
-  {name:'notion',enabled:true},{name:'github',enabled:true,installation_url:'https://github.com/apps/demo/installations/new'},{name:'linear',enabled:false},
+  {name:'notion',enabled:true},{name:'github',enabled:true,installation_url:'https://github.com/apps/demo/installations/new'},{name:'linear',enabled:false},{name:'stripe',enabled:false},
  ]}} as unknown as Service);
  const body=await (await app.request('/v1/connectors')).json() as any;
  assert.deepEqual(body.data,[
-  {name:'notion',title:'Notion',description:'页面、数据库与工作区搜索',avatar_url:'https://connany.example/connectors/notion/avatar.svg'},
-  {name:'github',title:'GitHub',description:'仓库、Issue 与 Pull Request',avatar_url:'https://connany.example/connectors/github/avatar.svg'},
+  {name:'notion',title:'Notion',category:'collaboration',description:'Pages, databases and workspace search',avatar_url:'https://connany.example/connectors/notion/avatar.svg'},
+  {name:'github',title:'GitHub',category:'development',description:'Repositories, issues and pull requests',avatar_url:'https://connany.example/connectors/github/avatar.svg'},
  ]);
+ // Only categories with an enabled connector, in display order; English by default.
+ assert.deepEqual(body.categories,[{name:'collaboration',title:'Collaboration'},{name:'development',title:'Code & deploy'}]);
+ const zh=await app.request('/v1/connectors?lang=zh-CN');assert.equal(zh.headers.get('Content-Language'),'zh-CN');
+ const zhBody=await zh.json() as any;assert.equal(zhBody.data[0].description,'页面、数据库与工作区搜索');assert.equal(zhBody.categories[0].title,'协作与办公');assert.equal(zhBody.data[0].title,'Notion');
+ const header=await (await app.request('/v1/connectors',{headers:{'Accept-Language':'zh-TW,zh;q=0.9,en;q=0.8'}})).json() as any;assert.equal(header.categories[1].title,'代码与部署');
+ const explicit=await (await app.request('/v1/connectors?lang=en',{headers:{'Accept-Language':'zh-CN'}})).json() as any;assert.equal(explicit.categories[0].title,'Collaboration');
+ assert.equal((await app.request('/v1/connectors?lang=fr')).status,400);
  const avatar=await app.request('/connectors/linear/avatar.svg');
  assert.equal(avatar.status,200);assert.equal(avatar.headers.get('Content-Type'),'image/svg+xml');assert((await avatar.text()).startsWith('<svg'));
  assert.equal((await app.request('/connectors/unknown/avatar.svg')).status,400);

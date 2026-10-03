@@ -8,12 +8,12 @@ import {Vault} from '../../src/crypto.js';
 import {Service} from '../../src/service.js';
 import {ConnectorRuntime} from '../../src/connectors/index.js';
 import {createApp} from '../../src/app.js';
-import {config} from '../support.js';
+import {config,connectorClients} from '../support.js';
 if(!process.env.TEST_DATABASE_URL)throw new Error('TEST_DATABASE_URL is required');
 const schema=`admin_${randomBytes(8).toString('hex')}`;
 const owner=new pg.Pool({connectionString:process.env.TEST_DATABASE_URL});
 const pool=new pg.Pool({connectionString:process.env.TEST_DATABASE_URL,options:`-c search_path=${schema}`});
-const emptyConfig={...config,connectors:{notion:{clientId:'',clientSecret:''},linear:{clientId:'',clientSecret:''},github:{clientId:'',clientSecret:''}}};
+const emptyConfig={...config,connectors:connectorClients()};
 const calls:{url:string;auth:string;body:string}[]=[];
 const fetcher:typeof fetch=async(url,init)=>{
   const u=String(url);calls.push({url:u,auth:new Headers(init?.headers).get('Authorization')||'',body:String(init?.body||'')});

@@ -72,15 +72,43 @@ GitHub App 安装授权决定仓库范围；用户 OAuth 决定操作主体。Co
 
 [官方文档](https://linear.app/docs/mcp)
 
+## 其他官方托管 MCP 连接器
+
+以下连接器和 Notion、Linear 一样走官方 MCP 授权：管理员在「连接器」点启用，Connany 自动完成 OAuth 客户端注册（动态客户端注册，RFC 7591），然后点「同步工具目录」用自己的账号授权一次。不需要去各平台申请应用或填写凭证。
+
+| 分类 | 连接器 |
+| --- | --- |
+| 开发与运维 | Sentry、PostHog、Vercel、Supabase、Neon、Netlify、GitLab、Cloudflare（Workers、KV、R2、D1）、Prisma |
+| 支付 | Stripe、PayPal、Square |
+| 协作与办公 | Atlassian（Jira、Confluence）、ClickUp、monday.com、Airtable、Todoist、Miro、Canva、Intercom |
+| 建站 | Webflow、Wix |
+
+说明：
+
+- 端点、权限范围（scope）和 RFC 8707 resource 均取自各平台公开的 OAuth 元数据（RFC 9728 受保护资源元数据、RFC 8414 授权服务器元数据），并确认了动态注册、PKCE S256 和 Streamable HTTP 端点。是否能真实注册和授权，需要用真实账号点一次启用和同步来验证。
+- Vercel、Supabase、monday.com、GitLab、Miro 只接受带密钥的客户端：注册时平台下发的 `client_secret` 会加密保存，换取令牌时按注册结果使用 `client_secret_post` 或 `client_secret_basic`。
+- 平台拒绝注册时，后台会显示平台返回的状态码和错误说明（如 `400 · invalid_redirect_uri · …`），便于排查。常见原因是平台限制回调域名或要求人工审核。
+- 账号名称按以下顺序获取：OIDC userinfo、id_token、令牌响应中的用户字段、JWT 格式的访问令牌。都没有时（例如令牌是不透明字符串且平台没有 userinfo），连接照常可用，但显示为「<平台> 账号」并标记 `identity.unverified=true`：这类连接不会和其他连接合并，重新授权时也无法确认是同一个账号。
+- 未接入：Asana、Box、HubSpot 不支持动态注册；Figma 的 MCP 注册只对审核过的客户端开放；Hugging Face 的 MCP 不需要登录。
+
 ## 新增内置连接器
 
-连接器统一登记在 `src/connectors/catalog.ts`。标准的官方远程 MCP（同一域名下提供 `/register`、`/authorize`、`/token` 和 MCP 端点，支持动态客户端注册与 PKCE）只需新增一条目录项：
+连接器统一登记在 `src/connectors/catalog.ts`。支持动态客户端注册和 PKCE 的官方远程 MCP 只需新增一条目录项：
 
-- `website`：官网地址，用于连接器卡片的外链。
-- `label`、`icon`：后台卡片的名称和图标（内联 SVG，推荐取自 [LobeHub Icons](https://icons.lobehub.com)）。
-- `auth: 'mcp'`，`mcp.origin` 填官方 MCP 域名；端点不是 `/mcp` 时设置 `mcp.endpoint`，需要额外授权参数时设置 `mcp.authorizeParams`，要求 RFC 8707 resource 时设置 `mcp.resource: true`。
-- `identify`：从 token 响应或 MCP 工具解析 `account_id`（及可选 `workspace_id`），用于连接去重和重新授权校验。
-- 可选 `refreshIdentity`：刷新已有连接的显示名称。
+- `website`、`label`、`description`、`icon`：后台卡片的官网、名称、能力描述和图标（内联 SVG，推荐 [Simple Icons](https://simpleicons.org)，CC0）。描述需在 `public/admin-i18n.js` 补英文。
+- `auth: 'mcp'`，`mcp.origin` 填 MCP 域名，`mcp.endpoint` 填 MCP 路径（默认 `/mcp`）。
+- `mcp.oauth`：授权服务器元数据中的 `authorize`、`token`、`register`，以及可选的 `revoke`、`userinfo`。不填时按旧约定使用 `origin + /authorize`、`/token`、`/register`。
+- `mcp.scope`：受保护资源元数据的 `scopes_supported`（或 WWW-Authenticate 中的 scope）；`mcp.resource`：受保护资源元数据中的 `resource` 原样填写。
+- `mcp.clientAuth`：授权服务器不支持 `none`（公开客户端）时填 `client_secret_post` 或 `client_secret_basic`。
+- 可选 `identify` / `refreshIdentity`：平台有专门的「当前用户」工具时自定义账号识别；不填则使用上文的通用识别。
+
+可以用下面的方式读取元数据（只读请求）：
+
+```bash
+curl -s -X POST https://mcp.example.com/mcp -H 'Content-Type: application/json' -d '{}' -D - -o /dev/null | grep -i www-authenticate
+curl -s https://mcp.example.com/.well-known/oauth-protected-resource/mcp
+curl -s https://<授权服务器>/.well-known/oauth-authorization-server
+```
 
 后台「连接器」、连接路由、工具校验、工具列表会自动出现新连接器，无需修改数据库。需要自定义 OAuth 的连接器（如 GitHub App）仍在 `ConnectorRuntime`（`src/connectors/index.ts`）中单独实现。
 

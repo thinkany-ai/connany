@@ -1,4 +1,5 @@
 import { HostedMcp } from './hosted-mcp.js';
+import { genericIdentity } from './mcp-identity.js';
 import { z } from 'zod';
 import { githubRestTools } from './github-rest.js';
 import type { Config } from '../config.js';
@@ -30,9 +31,10 @@ export class ConnectorRuntime {
   authorizeUrl(connector: ConnectorName, state: string, verifier: string) {
     if (!this.enabled(connector)) throw new AppError('connector_not_configured', 'This connector is not configured.', 503);
     const spec = definition(connector);
-    const url = new URL(spec.auth === 'mcp' ? `${spec.mcp.origin}/authorize` : 'https://github.com/login/oauth/authorize');
+    const url = new URL(spec.auth === 'mcp' ? this.mcp(connector).oauthUrl('authorize')! : 'https://github.com/login/oauth/authorize');
     url.search = new URLSearchParams({ client_id: this.config.connectors[connector].clientId, redirect_uri: this.callback(connector), response_type: 'code', state }).toString();
     { url.searchParams.set('code_challenge', challenge(verifier)); url.searchParams.set('code_challenge_method', 'S256'); }
+    if (spec.auth === 'mcp' && spec.mcp.scope) url.searchParams.set('scope', spec.mcp.scope);
     for (const [key, value] of Object.entries(spec.mcp.authorizeParams || {})) if (spec.auth === 'mcp') url.searchParams.set(key, value);
     const resource = spec.auth === 'mcp' ? this.mcp(connector).resource : undefined;
     if (resource) url.searchParams.set('resource', resource);
@@ -40,6 +42,7 @@ export class ConnectorRuntime {
     if (connector === 'github') url.searchParams.set('prompt', 'select_account');
     return url.toString();
   }
+  private mcpClient(connector: ConnectorName) { const app = this.config.connectors[connector]; return { clientId: app.clientId, clientSecret: app.clientSecret, authMethod: app.authMethod || 'none' } as const; }
   private basic(connector: ConnectorName) { const p = this.config.connectors[connector]; return `Basic ${Buffer.from(`${p.clientId}:${p.clientSecret}`).toString('base64')}`; }
   private async request(url: string, init: RequestInit, tokenRequest = false): Promise<any> {
     let response: Response;
@@ -57,7 +60,7 @@ export class ConnectorRuntime {
   private async token(connector: ConnectorName, fields: Record<string, string>, old?: Credentials) {
     const app = this.config.connectors[connector];
     const urls = { github: 'https://github.com/login/oauth/access_token' };
-    const raw = definition(connector).auth === 'mcp' ? await this.mcp(connector).token(app.clientId, fields) : await this.request(urls.github, { method: 'POST', headers: { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({...fields,client_id:app.clientId,client_secret:app.clientSecret}).toString() }, true);
+    const raw = definition(connector).auth === 'mcp' ? await this.mcp(connector).token(this.mcpClient(connector), fields) : await this.request(urls.github, { method: 'POST', headers: { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({...fields,client_id:app.clientId,client_secret:app.clientSecret}).toString() }, true);
     if (typeof raw.access_token !== 'string' || !raw.access_token) throw new UpstreamError('invalid_token_response');
     const expires = (seconds: unknown) => typeof seconds === 'number' && seconds > 0 ? new Date(Date.now() + seconds * 1000).toISOString() : undefined;
     const credential: Credentials = { accessToken: raw.access_token, refreshToken: raw.refresh_token || old?.refreshToken,
@@ -79,6 +82,7 @@ export class ConnectorRuntime {
   async identify(connector: ConnectorName, credential: Credentials, raw: any): Promise<Identity> {
     const spec = definition(connector);
     if (spec.identify) return spec.identify(this.mcp(connector), credential, raw);
+    if (spec.auth === 'mcp') return genericIdentity(this.mcp(connector), credential, raw, spec.label);
     if (connector === 'github') {
       const me = await this.api('github', '/user', credential);
       const installs = await this.api('github', '/user/installations?per_page=100', credential);
@@ -91,7 +95,7 @@ export class ConnectorRuntime {
     if (definition(connector).auth === 'github_app') {
       await this.request(`https://api.github.com/applications/${encodeURIComponent(this.config.connectors.github.clientId)}/token`, { method: 'DELETE', headers: { Authorization: this.basic(connector), Accept: 'application/vnd.github+json', 'Content-Type': 'application/json', 'X-GitHub-Api-Version': this.config.githubVersion, 'User-Agent': 'Connany/0.1' }, body: JSON.stringify({ access_token: credential.accessToken }) });
     } else {
-      await this.mcp(connector).revoke(this.config.connectors[connector].clientId, credential);
+      await this.mcp(connector).revoke(this.mcpClient(connector), credential);
     }
   }
   async execute(name: ToolName, input: any, credential: Credentials): Promise<unknown> {
