@@ -43,6 +43,7 @@
         [/^全部 (\d+) 个连接器 ↗$/,(_,count)=>`All ${count} connectors ↗`],
         [/^(.+) 账号$/,(_,name)=>`${name} account`],
         [/^(.+) 拒绝了客户端注册（(.+)）。$/,(_,name,reason)=>`${name} rejected the client registration (${reason}).`],
+        [/^服务器返回了非预期的响应（HTTP (\d+)），请稍后重试或查看服务日志。$/,(_,status)=>`The server returned an unexpected response (HTTP ${status}). Retry later or check the service logs.`],
         [/^(\d+) 个$/,(_,count)=>`${count}`],
         [/^(.+) · Connany$/,(_,title)=>`${messages[title]||title} · Connany`]
       ];

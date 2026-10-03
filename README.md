@@ -5,12 +5,14 @@
 
 Connany is an open-source, multi-tenant connector service for agent applications. It manages user authorization, connections, and credentials so your agent backend can list tools and work with authorized data through a REST API or TypeScript SDK, without handling provider tokens.
 
-It ships with 25 connectors: **Notion, GitHub (App + MCP), Linear**, plus official hosted MCP servers for Sentry, PostHog, Atlassian, Vercel, Supabase, Neon, Netlify, GitLab, Cloudflare, Prisma, Stripe, PayPal, Square, ClickUp, monday.com, Airtable, Todoist, Miro, Canva, Intercom, Webflow and Wix. MCP is used to connect to upstream services; Connany exposes a REST API and SDK to agents, rather than hosting general-purpose MCP servers.
+It ships with 25 connectors across collaboration, development, databases, analytics, payments and design. Every connector except GitHub uses the provider's official hosted MCP server and is enabled with one click: Connany registers the OAuth client automatically. MCP is used to connect to upstream services; Connany exposes a REST API and SDK to agents, rather than hosting general-purpose MCP servers.
+
+![Connany admin console: connectors grouped by category, with status and category filters](docs/images/connectors.png)
 
 ## Features
 
 - **Admin console:** configure connectors once and sync their tool catalogs, create a project for each agent, manage each project's API keys (zero-downtime rotation), inspect user connections and activity, read the API docs and agent integration guide, and (as an administrator) manage console users as administrators or members.
-- **User authorization:** hosted OAuth pages, single-use state, browser binding, and PKCE for GitHub and Linear.
+- **User authorization:** hosted OAuth pages, single-use state, browser binding, and PKCE (S256) on every OAuth flow.
 - **Project isolation:** every API key belongs to a project; user data is scoped to `project_id + external_user_id`.
 - **Connection management:** multiple accounts and workspaces, listing, active checks, reconnection, disconnection, and upstream revocation retries.
 - **Tool listing and calls:** list the official MCP tools a user's connection can use with `GET /v1/connections/{id}/tools` (or browse each connector's catalog with `GET /v1/tools`), inspect parameter schemas and read/write metadata, and call them with `POST /v1/connections/{id}/tools/{name}/call`. The SDK can expose just two tools to a model: `list_tools` and `call_tool`.
@@ -42,12 +44,19 @@ To use an existing database, set `DATABASE_URL` in `.env` and skip the Docker st
 
 ## Configure connectors
 
-| Connector | Setup | Capabilities |
-| --- | --- | --- |
-| Notion | Enable official MCP in the console; OAuth client registration is automatic | Pages, databases, and workspace search |
-| GitHub | Configure a GitHub App’s Client ID, Client Secret, and App slug in the console | Repositories, issues, pull requests, and other official MCP tools |
-| Linear | Enable official MCP in the console; OAuth client registration is automatic | Issues, projects, and team collaboration |
-| 22 more hosted MCP servers | Same as Notion and Linear: enable in the console, registration is automatic | Error monitoring, analytics, deployments, databases, payments, project management, design, support and site builders |
+| Category | Connectors |
+| --- | --- |
+| Collaboration | [Notion](https://www.notion.com) · [Linear](https://linear.app) · [Atlassian](https://www.atlassian.com) (Jira, Confluence) · [ClickUp](https://clickup.com) · [monday.com](https://monday.com) · [Airtable](https://airtable.com) · [Todoist](https://todoist.com) · [Intercom](https://www.intercom.com) |
+| Code & deploy | [GitHub](https://github.com) · [GitLab](https://gitlab.com) · [Vercel](https://vercel.com) · [Netlify](https://www.netlify.com) · [Cloudflare](https://www.cloudflare.com) |
+| Databases | [Supabase](https://supabase.com) · [Neon](https://neon.com) · [Prisma](https://www.prisma.io) |
+| Monitoring & analytics | [Sentry](https://sentry.io) · [PostHog](https://posthog.com) |
+| Payments | [Stripe](https://stripe.com) · [PayPal](https://www.paypal.com) · [Square](https://squareup.com) |
+| Design & websites | [Canva](https://www.canva.com) · [Miro](https://miro.com) · [Webflow](https://webflow.com) · [Wix](https://www.wix.com) |
+
+- **Hosted MCP connectors (24):** click **Enable** in the console. Connany registers an OAuth client with the provider (RFC 7591), using a public client with PKCE or a confidential client as the provider requires.
+- **GitHub:** create a GitHub App and enter its Client ID, Client Secret and App slug in the console. Users also install the App and choose repositories.
+
+The list is also available to agents through `GET /v1/connectors` (enabled connectors with localized categories and descriptions, `lang=en|zh-CN`).
 
 After enabling a connector, click **Sync tool catalog** on its card once: upstream MCP servers list tools only to signed-in users, so you authorize with your own account and Connany keeps only the tool definitions. Users must still authorize their own accounts. GitHub repository access also requires installing the App and selecting repositories. See the [connector setup guide (Chinese)](docs/connector-setup.md).
 

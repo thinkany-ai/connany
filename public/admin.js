@@ -7,6 +7,12 @@
     toast.textContent = message; toast.hidden = false;
     clearTimeout(toastTimer); toastTimer = setTimeout(() => { toast.hidden = true; }, 4500);
   }
+  // A gateway in front of Connany can answer with its own HTML page (e.g. on 502/504).
+  async function readJson(response) {
+    const text = await response.text();
+    try { return JSON.parse(text); }
+    catch { return { error: { message: `服务器返回了非预期的响应（HTTP ${response.status}），请稍后重试或查看服务日志。` } }; }
+  }
   try { const notice = sessionStorage.getItem('connany_notice'); sessionStorage.removeItem('connany_notice'); if (notice) notify(notice); } catch {}
   document.querySelectorAll('[data-copy]').forEach(button => button.addEventListener('click', async () => {
     const input = document.getElementById(button.dataset.copy);
@@ -91,7 +97,7 @@
     if (typeof data.enabled === 'string') data.enabled = data.enabled === 'true';
     try {
       const response = await fetch(form.dataset.api, { method: 'POST', credentials: 'same-origin', redirect: 'error', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf }, body: JSON.stringify(data) });
-      const result = await response.json();
+      const result = await readJson(response);
       if (!response.ok) {
         if (response.status === 401 && result.error?.code === 'admin_unauthorized') { window.location.assign('/admin/login'); return; }
         const fields = result.error?.fields?.map(f => `${f.path.join('.')}: ${f.message}`).join('\n');
@@ -149,7 +155,7 @@
         headers: {Authorization: `Bearer ${key.value.trim()}`, 'Content-Type':'application/json'},
         ...(body === undefined ? {} : {body:JSON.stringify(body)}), signal: AbortSignal.timeout(60000)
       });
-      const result = await response.json();
+      const result = await readJson(response);
       if (!response.ok) throw new Error(`${result.error?.code || response.status}: ${result.error?.message || '请求失败'}${result.request_id ? ' · ' + result.request_id : ''}`);
       return result;
     }

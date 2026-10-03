@@ -6,12 +6,14 @@
 
 Connany 是面向 Agent 产品的开源多租户连接器服务。统一管理用户授权、连接和凭证，Agent 后端通过 REST API 或 TypeScript SDK 列出工具、操作已授权数据，无需接触平台 token。
 
-内置 25 个连接器：**Notion、GitHub（App + MCP）、Linear**，以及 Sentry、PostHog、Atlassian、Vercel、Supabase、Neon、Netlify、GitLab、Cloudflare、Prisma、Stripe、PayPal、Square、ClickUp、monday.com、Airtable、Todoist、Miro、Canva、Intercom、Webflow、Wix 的官方托管 MCP。MCP 是上游接入方式；Connany 当前对 Agent 提供 REST API 和 SDK，不是通用 MCP Server 托管平台。
+内置 25 个连接器，覆盖协作办公、代码与部署、数据库、监控分析、支付、设计与建站。除 GitHub 外都接入平台官方托管的 MCP，后台一键启用，Connany 自动注册 OAuth 客户端。MCP 是上游接入方式；Connany 对 Agent 提供 REST API 和 SDK，不是通用 MCP Server 托管平台。
+
+![Connany 管理后台：连接器按分类展示，支持状态和分类筛选](docs/images/connectors.png)
 
 ## 功能
 
 - 管理后台：连接器配置一次并同步工具目录，为每个 agent 创建项目，管理项目的 API Key（支持不停机轮换），查看用户连接及操作记录，阅读 API 文档和 Agent 接入指南；系统管理员还可以管理后台用户（系统管理员 / 普通用户）。
-- 用户授权：托管 OAuth 页面、一次性 state、浏览器绑定、GitHub/Linear PKCE。
+- 用户授权：托管 OAuth 页面、一次性 state、浏览器绑定、所有 OAuth 流程均使用 PKCE（S256）。
 - 项目隔离：每个 API Key 属于一个项目，用户数据按 `project_id + external_user_id` 归属。
 - 连接管理：多账号和工作区、查询、主动检查、重连、断开及上游撤销重试。
 - 工具列出与调用：通过 `GET /v1/connections/{id}/tools` 列出用户连接可用的官方 MCP 工具（连接前可用 `GET /v1/tools` 浏览连接器的工具目录）、参数 schema 和读写标记，通过 `POST /v1/connections/{id}/tools/{name}/call` 调用；SDK 可仅向模型暴露 `list_tools` / `call_tool` 两个工具。
@@ -43,12 +45,19 @@ npm run dev   # 或：make dev
 
 ## 配置连接器
 
-| 连接器 | 配置方式 | 能力 |
-| --- | --- | --- |
-| Notion | 后台一键启用官方 MCP，自动注册 OAuth 客户端 | 页面、数据库、工作区搜索 |
-| GitHub | 后台配置 GitHub App 的 Client ID、Client Secret、App slug | 仓库、Issue、Pull Request 等官方 MCP 工具 |
-| Linear | 后台一键启用官方 MCP，自动注册 OAuth 客户端 | Issue、项目、团队协作 |
-| 其他 22 个托管 MCP | 与 Notion、Linear 相同：后台一键启用，自动注册 OAuth 客户端 | 错误监控、产品分析、部署、数据库、支付、项目管理、设计、客服与建站 |
+| 分类 | 连接器 |
+| --- | --- |
+| 协作与办公 | [Notion](https://www.notion.com) · [Linear](https://linear.app) · [Atlassian](https://www.atlassian.com)（Jira、Confluence）· [ClickUp](https://clickup.com) · [monday.com](https://monday.com) · [Airtable](https://airtable.com) · [Todoist](https://todoist.com) · [Intercom](https://www.intercom.com) |
+| 代码与部署 | [GitHub](https://github.com) · [GitLab](https://gitlab.com) · [Vercel](https://vercel.com) · [Netlify](https://www.netlify.com) · [Cloudflare](https://www.cloudflare.com) |
+| 数据库 | [Supabase](https://supabase.com) · [Neon](https://neon.com) · [Prisma](https://www.prisma.io) |
+| 监控与分析 | [Sentry](https://sentry.io) · [PostHog](https://posthog.com) |
+| 支付 | [Stripe](https://stripe.com) · [PayPal](https://www.paypal.com) · [Square](https://squareup.com) |
+| 设计与建站 | [Canva](https://www.canva.com) · [Miro](https://miro.com) · [Webflow](https://webflow.com) · [Wix](https://www.wix.com) |
+
+- **托管 MCP 连接器（24 个）：** 后台点「启用」即可。Connany 按平台要求自动注册 OAuth 客户端（RFC 7591），使用公开客户端 + PKCE 或带密钥的机密客户端。
+- **GitHub：** 创建 GitHub App，在后台填写 Client ID、Client Secret 和 App slug；用户还需安装 App 并选择仓库。
+
+Agent 也可以通过 `GET /v1/connectors` 获取已启用的连接器，包含多语言的分类和说明（`lang=en|zh-CN`）。
 
 启用连接器后，在卡片上点一次「同步工具目录」：上游 MCP 只向已登录用户提供工具列表，所以用你自己的账号授权一次，Connany 只保存工具定义。用户仍需授权自己的账号；GitHub 仓库访问还需要安装 App 并选择仓库。详见 [连接器配置](docs/connector-setup.md)。
 

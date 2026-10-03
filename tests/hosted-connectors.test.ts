@@ -95,3 +95,25 @@ test('connector descriptions and category titles exist in every supported langua
  }
  assert.equal(pickLocale(undefined,'fr-FR,zh-CN;q=0.8'),'zh-CN');assert.equal(pickLocale('en','zh-CN'),'en');assert.equal(pickLocale(undefined,undefined),'en');
 });
+
+test('connector MCP headers are sent on every request and large tool catalogs are accepted',async()=>{
+ const seen:(string|null)[]=[];
+ const big='x'.repeat(5*1024*1024);
+ const fetcher=async(_url:any,init:any)=>{
+  const headers=new Headers(init.headers);seen.push(headers.get('x-posthog-mcp-mode'));
+  const body=JSON.parse(init.body);
+  if(body.method==='initialize')return Response.json({jsonrpc:'2.0',id:body.id,result:{protocolVersion:'2025-06-18'}});
+  if(body.method==='tools/list')return Response.json({jsonrpc:'2.0',id:body.id,result:{tools:[{name:'query-trends',description:big,inputSchema:{type:'object'},annotations:{readOnlyHint:true}}]}});
+  return new Response(null,{status:202});
+ };
+ const tools=await new HostedMcp(fetcher as any,'posthog').tools({accessToken:'a'});
+ assert.deepEqual(tools.map(t=>[t.name,t.read_only]),[['posthog.query-trends',true]]);
+ assert.deepEqual(seen,['tools','tools','tools']);
+});
+
+test('a server may grant a public client when a secret was requested, and a missing secret is otherwise rejected',async()=>{
+ const reply=(body:object)=>async()=>Response.json(body,{status:201});
+ const pub=await new HostedMcp(reply({client_id:'cl_1',token_endpoint_auth_method:'none'}),'vercel').register('https://connany.example/oauth/vercel/callback');
+ assert.deepEqual(pub,{clientId:'cl_1',clientSecret:'',authMethod:'none'});
+ await assert.rejects(()=>new HostedMcp(reply({client_id:'cl_2',token_endpoint_auth_method:'client_secret_post'}),'vercel').register('https://connany.example/oauth/vercel/callback'),{code:'invalid_client_registration'});
+});

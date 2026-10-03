@@ -31,7 +31,8 @@ export class HostedMcp {
     }
     return response;
   }
-  /** RFC 7591 dynamic client registration. Servers without public clients return a secret to keep. */
+  /** RFC 7591 dynamic client registration. Servers without public clients return a secret to keep;
+   *  a server may also grant a public client (`none`) even when a secret was requested. */
   async register(callback: string): Promise<McpClient> {
     this.assertRegistrable();
     const method = this.spec.clientAuth || 'none';
@@ -39,8 +40,8 @@ export class HostedMcp {
     const result = await response.json() as any;
     if (typeof result.client_id !== 'string' || !result.client_id) throw new UpstreamError('invalid_client_registration');
     const secret = typeof result.client_secret === 'string' ? result.client_secret : '';
-    if (method !== 'none' && !secret) throw new UpstreamError('invalid_client_registration');
     const granted = result.token_endpoint_auth_method;
+    if (method !== 'none' && !secret && granted !== 'none') throw new UpstreamError('invalid_client_registration');
     return { clientId: result.client_id, clientSecret: secret, authMethod: secret ? (granted === 'client_secret_basic' || granted === 'client_secret_post' ? granted : method === 'none' ? 'client_secret_post' : method) : 'none' };
   }
   /** Token endpoint request with the client authentication chosen at registration. */
@@ -72,9 +73,9 @@ export class HostedMcp {
     let sessionId: string | null = null;
     let protocol = '2025-03-26';
     let sequence = 0;
-    const rpc = async (method: string, params: unknown, notification = false): Promise<any> => {
+    const rpc = async (method: string, params: unknown, notification = false, limit = 4*1024*1024): Promise<any> => {
       const id = ++sequence;
-      const response = await this.request(this.endpoint, {method:'POST',headers:{Authorization:`Bearer ${credential.accessToken}`,'Content-Type':'application/json',Accept:'application/json, text/event-stream','MCP-Protocol-Version':protocol,...(sessionId?{'Mcp-Session-Id':sessionId}:{})},body:JSON.stringify({jsonrpc:'2.0',...(notification?{}:{id}),method,params})});
+      const response = await this.request(this.endpoint, {method:'POST',headers:{...this.spec.headers,Authorization:`Bearer ${credential.accessToken}`,'Content-Type':'application/json',Accept:'application/json, text/event-stream','MCP-Protocol-Version':protocol,...(sessionId?{'Mcp-Session-Id':sessionId}:{})},body:JSON.stringify({jsonrpc:'2.0',...(notification?{}:{id}),method,params})});
       sessionId = response.headers.get('mcp-session-id') || sessionId;
       if (notification) { await response.body?.cancel(); return; }
       // The server can keep an SSE response open. Stop reading at this RPC's response.
@@ -91,7 +92,7 @@ export class HostedMcp {
       try {
         while (true) {
           const {value,done} = await reader.read();
-          if (value) { size += value.length; if(size>4*1024*1024) throw new UpstreamError('mcp_response_too_large'); buffer += decoder.decode(value,{stream:true}); }
+          if (value) { size += value.length; if(size>limit) throw new UpstreamError('mcp_response_too_large'); buffer += decoder.decode(value,{stream:true}); }
           if (sse) {
             buffer = buffer.replace(/\r\n/g,'\n');
             let end: number;
@@ -118,7 +119,8 @@ export class HostedMcp {
     const rpc=await this.session(credential);const tools:any[]=[];let cursor:string|undefined;
     const seen=new Set<string>();
     do {
-      const result=await rpc('tools/list',cursor?{cursor}:{});
+      // Large servers (PostHog lists ~750 tools, ~5 MB) send the whole catalog in one page.
+      const result=await rpc('tools/list',cursor?{cursor}:{},false,16*1024*1024);
       if(!Array.isArray(result.tools))throw new UpstreamError('invalid_mcp_tools');
       tools.push(...result.tools);
       cursor=result.nextCursor;
