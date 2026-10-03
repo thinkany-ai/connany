@@ -35,28 +35,52 @@ export async function createAdmin(pool: pg.Pool, email: string, password: string
     return rows[0] as AdminIdentity;
   });
 }
+/** Counts attempts per bucket in a 15-minute window; returns the count including this attempt. */
+async function attempt(db: pg.Pool | pg.PoolClient, bucket: string) {
+  const { rows } = await db.query(`INSERT INTO admin_login_limits(bucket,window_start,count) VALUES($1,now(),1)
+    ON CONFLICT(bucket) DO UPDATE SET count=CASE WHEN admin_login_limits.window_start < now()-interval '15 minutes' THEN 1 ELSE admin_login_limits.count+1 END,
+    window_start=CASE WHEN admin_login_limits.window_start < now()-interval '15 minutes' THEN now() ELSE admin_login_limits.window_start END RETURNING count`,[bucket]);
+  return rows[0].count as number;
+}
+async function startSession(db: pg.PoolClient, adminId: string) {
+  const token = randomToken();
+  await db.query("INSERT INTO admin_sessions(token_hash,admin_id,expires_at) VALUES($1,$2,now()+interval '8 hours')",[hash(token),adminId]);
+  await db.query('DELETE FROM admin_sessions WHERE expires_at < now()');
+  return token;
+}
+export async function signupEnabled(db: pg.Pool | pg.PoolClient) {
+  const { rows } = await db.query("SELECT value FROM system_settings WHERE key='signup_enabled'");
+  return rows[0]?.value === true;
+}
 export class AdminAuth {
   constructor(private pool: pg.Pool) {}
   async login(email: string, password: string) {
     const normalized = emailSchema.parse(email);
     z.string().min(1).max(256).parse(password);
-    for (const bucket of ['global',hash(normalized)]) {
-      const { rows } = await this.pool.query(`INSERT INTO admin_login_limits(bucket,window_start,count) VALUES($1,now(),1)
-        ON CONFLICT(bucket) DO UPDATE SET count=CASE WHEN admin_login_limits.window_start < now()-interval '15 minutes' THEN 1 ELSE admin_login_limits.count+1 END,
-        window_start=CASE WHEN admin_login_limits.window_start < now()-interval '15 minutes' THEN now() ELSE admin_login_limits.window_start END RETURNING count`,[bucket]);
-      if (rows[0].count > (bucket === 'global' ? 100 : 10)) throw new AppError('login_rate_limited','登录尝试过多，请在 15 分钟后重试。',429);
-    }
+    for (const bucket of ['global',hash(normalized)])
+      if (await attempt(this.pool, bucket) > (bucket === 'global' ? 100 : 10)) throw new AppError('login_rate_limited','登录尝试过多，请在 15 分钟后重试。',429);
     const user = (await this.pool.query('SELECT * FROM admin_users WHERE email=$1',[normalized])).rows[0];
     const dummy = `scrypt:${'0'.repeat(32)}:${'0'.repeat(128)}`;
     const valid = await verifyPassword(password,user?.password_hash || dummy);
     if (!user || !valid) throw new AppError('invalid_login','邮箱或密码不正确。',401);
-    const token = randomToken();
-    await transaction(this.pool, async db => {
-      await db.query("INSERT INTO admin_sessions(token_hash,admin_id,expires_at) VALUES($1,$2,now()+interval '8 hours')",[hash(token),user.id]);
+    return transaction(this.pool, async db => {
       await db.query('DELETE FROM admin_login_limits WHERE bucket=$1',[hash(normalized)]);
-      await db.query('DELETE FROM admin_sessions WHERE expires_at < now()');
+      return startSession(db, user.id);
     });
-    return token;
+  }
+  /** Self-service registration, when an administrator opened it: a member with their own workspace, signed in. */
+  async signup(email: string, password: string) {
+    const normalized = emailSchema.parse(email); passwordSchema.parse(password);
+    if (!await signupEnabled(this.pool)) throw new AppError('signup_disabled','当前未开放注册，请联系管理员创建账号。',403);
+    if (await attempt(this.pool, 'signup') > 30) throw new AppError('signup_rate_limited','注册请求过多，请在 15 分钟后重试。',429);
+    const passwordHash = await hashPassword(password);
+    return transaction(this.pool, async db => {
+      const { rows } = await db.query(`INSERT INTO admin_users(id,email,password_hash,role) VALUES($1,$2,$3,'member') ON CONFLICT(email) DO NOTHING RETURNING id,email,role`, [id('admin'),normalized,passwordHash]);
+      if (!rows[0]) throw new AppError('user_exists','该邮箱已注册，请直接登录。',409);
+      await ensureWorkspace(db, rows[0]);
+      await db.query('INSERT INTO admin_audit(admin_id,actor_email,action,target) VALUES($1,$2,$3,$2)',[rows[0].id,normalized,'user.signed_up']);
+      return startSession(db, rows[0].id);
+    });
   }
   async current(token?: string): Promise<AdminIdentity | null> {
     if (!token || token.length !== 43) return null;
@@ -68,10 +92,7 @@ export class AdminAuth {
   async changePassword(adminId: string, currentPassword: string, newPassword: string) {
     z.string().min(1).max(256).parse(currentPassword);
     passwordSchema.parse(newPassword);
-    const {rows: limits} = await this.pool.query(`INSERT INTO admin_login_limits(bucket,window_start,count) VALUES($1,now(),1)
-      ON CONFLICT(bucket) DO UPDATE SET count=CASE WHEN admin_login_limits.window_start < now()-interval '15 minutes' THEN 1 ELSE admin_login_limits.count+1 END,
-      window_start=CASE WHEN admin_login_limits.window_start < now()-interval '15 minutes' THEN now() ELSE admin_login_limits.window_start END RETURNING count`, ['password:'+adminId]);
-    if (limits[0].count > 10) throw new AppError('password_rate_limited','尝试过多，请在 15 分钟后重试。',429);
+    if (await attempt(this.pool, 'password:'+adminId) > 10) throw new AppError('password_rate_limited','尝试过多，请在 15 分钟后重试。',429);
     await transaction(this.pool, async db => {
       const user = (await db.query('SELECT password_hash FROM admin_users WHERE id=$1 FOR UPDATE',[adminId])).rows[0];
       if (!user || !await verifyPassword(currentPassword,user.password_hash)) throw new AppError('invalid_password','当前密码不正确。',400);
@@ -133,6 +154,12 @@ export class ConsoleUsers {
       await db.query('UPDATE admin_audit SET actor_email=$1 WHERE admin_id=$2 AND actor_email IS NULL',[user.email,userId]);
       await db.query('DELETE FROM admin_users WHERE id=$1',[userId]);
       await this.audit(db, actor, 'user.deleted', user.email);
+    });
+  }
+  async setSignup(actor: AdminIdentity, enabled: boolean) {
+    await transaction(this.pool, async db => {
+      await db.query(`INSERT INTO system_settings(key,value) VALUES('signup_enabled',$1) ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value,updated_at=now()`,[JSON.stringify(enabled)]);
+      await this.audit(db, actor, enabled ? 'signup.opened' : 'signup.closed', 'signup');
     });
   }
   private async lock(db: pg.PoolClient, userId: string) {

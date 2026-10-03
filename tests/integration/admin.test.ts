@@ -200,6 +200,34 @@ test('administrators manage console users; members use the workbench but not the
   const activity=await(await admin('/activity')).text();assert(activity.includes('member@example.com'));assert(activity.includes('project.created'));
   assert.equal((await admin(`/api/users/${member.id}/delete`,'POST',{})).status,404);
 });
+test('self-service sign-up is closed by default; when opened it creates a signed-in member with its own workspace',async()=>{
+  const anon=(path:string,method='GET',body?:unknown)=>app.request(`http://localhost:3000/admin${path}`,{method,headers:{Origin:config.publicBaseUrl,'Content-Type':'application/json'},...(body===undefined?{}:{body:JSON.stringify(body)})});
+  const form={email:'New.User@example.com',password:'new-user-password',confirm_password:'new-user-password'};
+  assert(!(await(await anon('/login')).text()).includes('/admin/signup'));
+  assert.equal((await anon('/signup')).status,302);
+  const closed=await anon('/api/signup','POST',form);assert.equal(closed.status,403);assert.equal(((await closed.json()) as any).error.code,'signup_disabled');
+  // Only administrators change the setting.
+  await pool.query("INSERT INTO admin_users(id,email,password_hash,role) VALUES('admin_member_s','member-s@example.com',(SELECT password_hash FROM admin_users WHERE email='admin@example.com'),'member') ON CONFLICT DO NOTHING");
+  const memberLogin=await anon('/api/login','POST',{email:'member-s@example.com',password:'test-admin-password-123'});const memberCookie=memberLogin.headers.get('set-cookie')!.split(';')[0];
+  const memberHtml=await(await app.request('http://localhost:3000/admin',{headers:{Cookie:memberCookie}})).text();const memberCsrf=memberHtml.match(/name="csrf-token" content="([^"]+)"/)![1];
+  assert.equal((await app.request('http://localhost:3000/admin/api/settings/signup',{method:'POST',headers:{Cookie:memberCookie,Origin:config.publicBaseUrl,'Content-Type':'application/json','X-CSRF-Token':memberCsrf},body:JSON.stringify({enabled:true})})).status,403);
+  assert.equal((await admin('/api/settings/signup','POST',{enabled:true})).status,200);
+  assert((await(await admin('/users')).text()).includes('name="enabled" checked'));
+  assert((await(await anon('/login')).text()).includes('/admin/signup'));
+  assert.equal((await anon('/signup')).status,200);
+  assert.equal((await anon('/api/signup','POST',{...form,confirm_password:'something-else'})).status,400);
+  assert.equal((await anon('/api/signup','POST',{...form,password:'short',confirm_password:'short'})).status,400);
+  const signed=await anon('/api/signup','POST',form);assert.equal(signed.status,201);
+  const newCookie=signed.headers.get('set-cookie')!;assert.match(newCookie,/HttpOnly/);
+  const home=await app.request('http://localhost:3000/admin',{headers:{Cookie:newCookie.split(';')[0]}});assert.equal(home.status,200);
+  const user=(await pool.query("SELECT u.role,(SELECT count(*)::int FROM workspaces w WHERE w.owner_id=u.id) AS workspaces FROM admin_users u WHERE email='new.user@example.com'")).rows[0];
+  assert.deepEqual(user,{role:'member',workspaces:1});
+  assert(!(await home.text()).includes('/admin/users'));
+  const again=await anon('/api/signup','POST',form);assert.equal(again.status,409);
+  assert.equal((await admin('/api/settings/signup','POST',{enabled:false})).status,200);
+  assert.equal((await anon('/api/signup','POST',{...form,email:'other@example.com'})).status,403);
+  assert.equal((await pool.query("SELECT count(*)::int n FROM admin_audit WHERE action IN ('signup.opened','signup.closed','user.signed_up')")).rows[0].n,3);
+});
 test('logout and admin password reset revoke sessions, and login attempts are limited',async()=>{
   assert.equal((await admin('/api/logout','POST',{})).status,200);assert.equal((await admin('/api/projects')).status,401);
   const login=await admin('/api/login','POST',{email:'admin@example.com',password:'test-admin-password-123'});cookie=login.headers.get('set-cookie')!.split(';')[0];

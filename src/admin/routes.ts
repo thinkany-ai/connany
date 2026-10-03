@@ -2,8 +2,8 @@ import { Hono } from 'hono';
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
 import { readFile } from 'node:fs/promises';
 import { z } from 'zod';
-import { AdminAuth, ConsoleUsers, csrfToken, passwordSchema, roleSchema, emailSchema, type AdminIdentity } from './auth.js';
-import { layout, loginPage, overview, connectorList, connectorHref, projectList, connectionsPage, activityPage, agentDocsPage, docsPage, testPage, projectDetail, usersPage } from './pages.js';
+import { AdminAuth, ConsoleUsers, csrfToken, signupEnabled, passwordSchema, roleSchema, emailSchema, type AdminIdentity } from './auth.js';
+import { layout, loginPage, signupPage, overview, connectorList, connectorHref, projectList, connectionsPage, activityPage, agentDocsPage, docsPage, testPage, projectDetail, usersPage } from './pages.js';
 import { connectorNames } from '../config.js';
 import { connector as connectorSpec } from '../connectors/catalog.js';
 import { connectorAppInput } from '../connector-store.js';
@@ -31,15 +31,15 @@ export function mountAdmin(root: Hono<any>, service: Service) {
     }
     const token = getCookie(c,'connany_admin');
     const admin = await auth.current(token);
-    if (path === '/login' && c.req.method === 'GET') return admin ? c.redirect('/admin') : next();
-    if (path === '/api/login' && c.req.method === 'POST') return next();
+    if ((path === '/login' || path === '/signup') && c.req.method === 'GET') return admin ? c.redirect('/admin') : next();
+    if ((path === '/api/login' || path === '/api/signup') && c.req.method === 'POST') return next();
     if (!admin || !token) {
       if (path.startsWith('/api/')) throw new AppError('admin_unauthorized','请登录管理员账号。',401);
       return c.redirect('/admin/login');
     }
     c.set('admin',admin); c.set('sessionToken',token); c.set('csrf',csrfToken(token));
     // The System section (user management) is for administrators only.
-    if (admin.role !== 'admin' && (path === '/users' || path.startsWith('/users/') || path.startsWith('/api/users'))) {
+    if (admin.role !== 'admin' && (path === '/users' || path.startsWith('/users/') || path.startsWith('/api/users') || path.startsWith('/api/settings'))) {
       if (path.startsWith('/api/')) throw new AppError('forbidden','需要系统管理员权限。',403);
       return c.redirect('/admin');
     }
@@ -50,7 +50,15 @@ export function mountAdmin(root: Hono<any>, service: Service) {
   app.get('/assets/admin-preferences.js', async c => { c.header('Content-Type','text/javascript; charset=utf-8'); return c.body(await readFile('public/admin-preferences.js','utf8')); });
   app.get('/assets/admin-i18n.js', async c => { c.header('Content-Type','text/javascript; charset=utf-8'); return c.body(await readFile('public/admin-i18n.js','utf8')); });
   app.get('/assets/admin.js', async c => { c.header('Content-Type','text/javascript; charset=utf-8'); return c.body(await readFile('public/admin.js','utf8')); });
-  app.get('/login', c => c.html(loginPage()));
+  app.get('/login', async c => c.html(loginPage(await signupEnabled(service.pool))));
+  app.get('/signup', async c => await signupEnabled(service.pool) ? c.html(signupPage()) : c.redirect('/admin/login'));
+  app.post('/api/signup', async c => {
+    const input = z.object({email:z.string(),password:z.string(),confirm_password:z.string()}).strict().parse(await c.req.json());
+    if (input.password !== input.confirm_password) throw new AppError('password_mismatch','两次输入的密码不一致。',400);
+    const token = await auth.signup(input.email,input.password);
+    setCookie(c,'connany_admin',token,cookieOptions());
+    return c.json({ok:true},201);
+  });
   app.post('/api/login', async c => {
     const input = z.object({email:z.string(),password:z.string()}).strict().parse(await c.req.json());
     const token = await auth.login(input.email,input.password);
@@ -212,7 +220,11 @@ export function mountAdmin(root: Hono<any>, service: Service) {
     await service.pool.query('INSERT INTO admin_audit(admin_id,action,target) VALUES($1,$2,$3)',[c.get('admin').id,'connection.disconnected',c.req.param('id')]);
     return c.json(result);
   });
-  app.get('/users', async c => render(c,'用户管理','users',usersPage(await users.list(),c.get('admin'))));
+  app.get('/users', async c => render(c,'用户管理','users',usersPage(await users.list(),c.get('admin'),await signupEnabled(service.pool))));
+  app.post('/api/settings/signup', async c => {
+    const {enabled} = z.object({enabled:z.boolean()}).strict().parse(await c.req.json());
+    await users.setSignup(c.get('admin'),enabled); return c.json({enabled});
+  });
   app.get('/api/users', async c => c.json({data:await users.list()}));
   app.post('/api/users', async c => {
     const input = z.object({email:emailSchema,password:passwordSchema,role:roleSchema.default('member')}).strict().parse(await c.req.json());
