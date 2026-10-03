@@ -19,12 +19,13 @@ let failRevoke = false;
 let tokenRevocations = 0;
 let seenSecrets: string[] = [];
 const vercelTokenRequests: Record<string, string>[] = [];
+let vercelRegistrations = 0;
 const fetcher: typeof fetch = async (url, init) => {
   const u = String(url); const body = String(init?.body || '');
   const headers = new Headers(init?.headers);
   seenSecrets.push(headers.get('Authorization') || '');
   // A hosted MCP server whose authorization server lives elsewhere and issues confidential clients.
-  if (u === 'https://api.vercel.com/login/oauth/register') return Response.json({ client_id: 'vercel-client', client_secret: 'vercel-secret', token_endpoint_auth_method: 'client_secret_post' });
+  if (u === 'https://api.vercel.com/login/oauth/register') return Response.json({ client_id: vercelRegistrations++ ? `vercel-client-${vercelRegistrations}` : 'vercel-client', client_secret: 'vercel-secret', token_endpoint_auth_method: 'client_secret_post' });
   if (u === 'https://api.vercel.com/login/oauth/token') {
     const fields = Object.fromEntries(new URLSearchParams(body)); vercelTokenRequests.push(fields);
     if (fields.client_secret !== 'vercel-secret' || fields.resource !== 'https://mcp.vercel.com/') return Response.json({ error: 'invalid_client' }, { status: 401 });
@@ -296,4 +297,15 @@ test('a hosted MCP connector with a separate authorization server and confidenti
   const call = await api(`/v1/connections/${flow.id}/tools/vercel.list_projects/call`, 'POST', { external_user_id: 'vercel-user-1', input: {} });
   assert.equal(call.status, 200); assert.equal(((await call.json()) as any).data.content[0].text, 'projects');
   assert(vercelTokenRequests.length > 0 && vercelTokenRequests.every(fields => fields.client_secret === 'vercel-secret' && fields.client_id === 'vercel-client'));
+  // Pausing and enabling again keep the registered client.
+  await service.connectorStore.in('ws_default').saveMcp('vercel', false, 'admin_vercel');
+  await service.connectorStore.in('ws_default').saveMcp('vercel', true, 'admin_vercel');
+  assert.equal((await pool.query("SELECT count(*)::int n FROM connector_apps WHERE connector='vercel'")).rows[0].n, 1);
+  // A client registered with other authentication (here: an older public client) is replaced on enable;
+  // existing connections keep the client that issued their tokens.
+  await pool.query("UPDATE connector_apps SET settings=settings - 'requested_auth' || '{\"token_endpoint_auth_method\":\"none\"}' WHERE id=$1", [app.id]);
+  await service.connectorStore.in('ws_default').saveMcp('vercel', true, 'admin_vercel');
+  const apps = (await pool.query("SELECT id, settings FROM connector_apps WHERE connector='vercel' ORDER BY id=$1 DESC", [app.id])).rows;
+  assert.equal(apps.length, 2); assert.equal(apps[1].settings.requested_auth, 'client_secret_post');
+  assert.equal((await pool.query('SELECT connector_app_id FROM connections WHERE id=$1', [flow.id])).rows[0].connector_app_id, app.id);
 });

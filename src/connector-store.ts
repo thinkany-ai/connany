@@ -82,11 +82,17 @@ export class ConnectorStore {
     await transaction(this.pool, async db => {
       await db.query('SELECT pg_advisory_xact_lock(804217332)');
       const existing = (await db.query("SELECT a.* FROM connectors s JOIN connector_apps a ON a.id=s.active_app_id WHERE s.workspace_id=$1 AND s.name=$2",[this.workspaceId,name])).rows[0];
-      let appId = existing?.settings?.transport === 'mcp' && existing.settings.callback_url === this.base.callback(name) ? existing.id : null;
+      // Register again when the callback or the requested client authentication changed (e.g. a
+      // connector now needs a confidential client). Connections keep the client they were issued by.
+      const requested = connectorSpec(name).mcp.clientAuth || 'none';
+      let appId = existing?.settings?.transport === 'mcp' && existing.settings.callback_url === this.base.callback(name)
+        && (existing.settings.requested_auth ?? existing.settings.token_endpoint_auth_method ?? 'none') === requested ? existing.id : null;
+      // Pausing never registers; it keeps whatever client is active.
+      if (!appId && !enabled) appId = existing?.id ?? null;
       if (!appId && enabled) {
         const client = await this.base.mcp(name).register(this.base.callback(name));
         appId = id('capp');
-        await db.query("INSERT INTO connector_apps(id,workspace_id,connector,client_id,secret_ciphertext,settings) VALUES($1,$2,$3,$4,$5,$6)", [appId,this.workspaceId,name,client.clientId,this.vault.seal(client.clientSecret,this.context(appId)),JSON.stringify({transport:'mcp',callback_url:this.base.callback(name),token_endpoint_auth_method:client.authMethod})]);
+        await db.query("INSERT INTO connector_apps(id,workspace_id,connector,client_id,secret_ciphertext,settings) VALUES($1,$2,$3,$4,$5,$6)", [appId,this.workspaceId,name,client.clientId,this.vault.seal(client.clientSecret,this.context(appId)),JSON.stringify({transport:'mcp',callback_url:this.base.callback(name),token_endpoint_auth_method:client.authMethod,requested_auth:requested})]);
       }
       await db.query("INSERT INTO connectors(workspace_id,name,active_app_id,enabled) VALUES($1,$2,$3,$4) ON CONFLICT(workspace_id,name) DO UPDATE SET active_app_id=EXCLUDED.active_app_id,enabled=EXCLUDED.enabled,updated_at=now()",[this.workspaceId,name,appId,enabled]);
       await db.query('INSERT INTO admin_audit(admin_id,action,target) VALUES($1,$2,$3)',[adminId,'connector.saved',name]);

@@ -59,8 +59,9 @@ export class HostedMcp {
   async revoke(client: McpClient, credential: Credentials) {
     this.assertRegistrable();
     const url = this.oauthUrl('revoke');
-    // Servers without a revocation endpoint only lose the local credential.
-    if (!url) return;
+    // Servers without a revocation endpoint only lose the local credential, and so do public
+    // clients where the server wants a confidential one (it rejects their revocations).
+    if (!url || (client.authMethod === 'none' && this.spec.clientAuth)) return;
     await this.clientRequest(url, client, {token:credential.refreshToken || credential.accessToken,token_type_hint:credential.refreshToken?'refresh_token':'access_token'});
   }
   /** OIDC userinfo, when the authorization server offers it. Used only to name the account. */

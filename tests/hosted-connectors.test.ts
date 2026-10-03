@@ -117,3 +117,13 @@ test('a server may grant a public client when a secret was requested, and a miss
  assert.deepEqual(pub,{clientId:'cl_1',clientSecret:'',authMethod:'none'});
  await assert.rejects(()=>new HostedMcp(reply({client_id:'cl_2',token_endpoint_auth_method:'client_secret_post'}),'vercel').register('https://connany.example/oauth/vercel/callback'),{code:'invalid_client_registration'});
 });
+
+test('public clients skip revocation where the server only revokes for confidential clients',async()=>{
+ const urls:string[]=[];const headers:(string|null)[]=[];
+ const fetcher=async(url:any,init:any)=>{urls.push(String(url));headers.push(new Headers(init.headers).get('authorization'));return new Response('{}');};
+ await new HostedMcp(fetcher as any,'todoist').revoke({clientId:'pub',clientSecret:'',authMethod:'none'},{accessToken:'a'});
+ assert.deepEqual(urls,[]);
+ await new HostedMcp(fetcher as any,'todoist').revoke({clientId:'tdd',clientSecret:'s',authMethod:'client_secret_basic'},{accessToken:'a'});
+ assert.deepEqual(urls,['https://todoist.com/api/v1/revoke']);
+ assert.equal(headers[0],`Basic ${Buffer.from('tdd:s').toString('base64')}`);
+});
