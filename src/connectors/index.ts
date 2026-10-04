@@ -98,8 +98,9 @@ export class ConnectorRuntime {
       await this.mcp(connector).revoke(this.mcpClient(connector), credential);
     }
   }
-  async execute(name: ToolName, input: any, credential: Credentials): Promise<unknown> {
-    if (!Object.hasOwn(restTools,name)) return this.mcp(name.split('.')[0] as ConnectorName).call(name,input,credential);
+  /** `known`: the tool is in the cached catalog, so the upstream list is not fetched to check it. */
+  async execute(name: ToolName, input: any, credential: Credentials, known = false): Promise<unknown> {
+    if (!Object.hasOwn(restTools,name)) return this.mcp(name.split('.')[0] as ConnectorName).call(name,input,credential,known);
     if (Object.hasOwn(githubRestTools, name)) {
       const action = githubRestTools[name as keyof typeof githubRestTools];
       const request = action.request(action.schema.parse(input));

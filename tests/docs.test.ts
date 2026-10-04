@@ -10,7 +10,11 @@ test('public docs and downloads work without authentication or connector initial
  const page=await app.request('/docs');assert.equal(page.status,200);const html=await page.text();
  assert(html.includes('https://connect.example'));assert(!html.includes('{{BASE_URL}}'));assert(html.includes('aria-label="Documentation sections"'));assert(html.includes('data-copy-code'));
  assert(page.headers.get('Content-Security-Policy')?.includes("script-src 'self'"));
- for(const path of ['/docs/api.md','/docs/sdk.ts','/docs/assets/docs.css','/docs/assets/docs.js'])assert.equal((await app.request(path)).status,200);
+ for(const path of ['/docs/api.md','/docs/sdk.ts','/docs/assets/docs.css','/docs/assets/docs.js','/docs/agent.md','/docs/mcp.md'])assert.equal((await app.request(path)).status,200);
+ // The agent guide and MCP guide are public too, with this deployment's addresses and tabs between the pages.
+ const agent=await(await app.request('/docs/agent?lang=zh-CN')).text();assert(agent.includes('aria-current="page">Agent 接入'));assert(agent.includes('id="agent-prompt"'));assert(agent.includes('CONNANY_BASE_URL=https://connect.example'));
+ const mcp=await(await app.request('/docs/mcp')).text();assert(mcp.includes('claude mcp add --transport http connany https://connect.example/mcp'));assert(!mcp.includes('connany.example.com'));assert(mcp.includes('href="/docs/agent"'));
+ assert((await(await app.request('/docs/mcp.md?lang=zh-CN')).text()).includes('https://connect.example/skills/connany/SKILL.md'));
  assert.equal((await app.request('/docs/')).headers.get('Location'),'/docs');
  const source=await readFile('src/app.ts','utf8');const markdown=await (await app.request('/docs/api.md')).text();
  for(const match of source.matchAll(/app\.(get|post|delete)\('(\/v1\/[^']+)'/g)) {

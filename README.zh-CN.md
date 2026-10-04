@@ -6,7 +6,7 @@
 
 Connany 是面向 Agent 产品的开源多租户连接器服务。统一管理用户授权、连接和凭证，Agent 后端通过 REST API 或 TypeScript SDK 列出工具、操作已授权数据，无需接触平台 token。
 
-内置 25 个连接器，覆盖协作办公、代码与部署、数据库、监控分析、支付、设计与建站。除 GitHub 外都接入平台官方托管的 MCP，后台一键启用，Connany 自动注册 OAuth 客户端。MCP 是上游接入方式；Connany 对 Agent 提供 REST API 和 SDK，不是通用 MCP Server 托管平台。
+内置 25 个连接器，覆盖协作办公、代码与部署、数据库、监控分析、支付、设计与建站。除 GitHub 外都接入平台官方托管的 MCP，后台一键启用，Connany 自动注册 OAuth 客户端。两种接入方式：Agent 产品通过 REST API 和 TypeScript SDK 集成；个人用户把 Connany 作为 MCP Server（配合 Skill）添加到 Claude Code、Codex、Cursor 中，用自己的账号使用连接器。
 
 ![Connany 管理后台：连接器按分类展示，支持状态和分类筛选](docs/images/connectors.png)
 
@@ -17,6 +17,7 @@ Connany 是面向 Agent 产品的开源多租户连接器服务。统一管理�
 - 项目隔离：每个 API Key 属于一个项目，用户数据按 `project_id + external_user_id` 归属。
 - 连接管理：多账号和工作区、查询、主动检查、重连、断开及上游撤销重试。
 - 工具列出与调用：通过 `GET /v1/connections/{id}/tools` 列出用户连接可用的官方 MCP 工具（连接前可用 `GET /v1/tools` 浏览连接器的工具目录）、参数 schema 和读写标记，通过 `POST /v1/connections/{id}/tools/{name}/call` 调用；SDK 可仅向模型暴露 `list_tools` / `call_tool` 两个工具。
+- MCP Server 与 Skill：Connany 本身是支持 OAuth 2.1 登录（动态客户端注册、PKCE）的远程 MCP Server。用户在 Claude Code、Codex、Cursor 中添加一次，即可在对话中连接账号，并通过 6 个固定工具搜索和调用工具；读写分为两个工具，客户端可以对每次修改单独确认。可下载的 Skill 告诉 agent 完整用法。
 - 事件流：一个项目级接口（`GET /v1/events`）汇总所有用户的连接、需要重新授权、断开和工具调用事件。
 - 凭证保护：AES-256-GCM 加密连接器与用户凭证、API Key 仅保存哈希、事务锁协调刷新和调用。
 
@@ -37,8 +38,8 @@ npm run dev   # 或：make dev
 
 管理员密码交互输入，至少 8 位。`npm run setup` 生成 `.env` 和随机加密密钥，不覆盖已有文件。根目录 `compose.yaml` 仅启动本地 PostgreSQL，默认密码仅供开发。
 
-- 管理后台：<http://localhost:3000/admin>，侧边栏「文档」包含 API 文档和 Agent 接入指南。
-- 公开 API 文档：<http://localhost:3000/docs>，支持中英文、代码复制、Markdown 和 SDK 下载。
+- 管理后台：<http://localhost:3000/admin>
+- 公开文档（无需登录）：<http://localhost:3000/docs>（API）、`/docs/agent`（Agent 接入指南）、`/docs/mcp`（MCP 与 Skill），支持代码复制、Markdown 和 SDK 下载；后台侧边栏「文档」直接打开。
 - 健康检查：<http://localhost:3000/health>
 
 已有数据库时直接配置 `.env` 的 `DATABASE_URL`，跳过 Docker 步骤。端口占用时同时修改 `PORT` 和 `PUBLIC_BASE_URL`。日常开发运行 `make dev`：依赖变化时自动安装，启动 PostgreSQL、执行迁移并以热更新模式运行（仅当 `DATABASE_URL` 指向 compose 数据库的 54329 端口时才启动 Docker）。服务端修改自动重启，静态页面资源刷新即可。
@@ -81,6 +82,18 @@ API Key 仅放在后端。SDK 两工具适配器默认只读，写操作由后�
 - [Agent 接入指南](docs/agent-integration.md)
 - [REST API 文档](docs/api.md) · [English API reference](docs/api.en.md)
 - [管理后台说明](docs/admin.md)
+
+## 在 Claude Code、Codex 中使用
+
+后台用户（在「用户管理」打开「开放注册」即可让用户自行注册）可以把 Connany 添加到自己的 agent：
+
+```bash
+claude mcp add --transport http connany https://connany.example.com/mcp   # 然后运行 /mcp 登录
+codex mcp add connany --url https://connany.example.com/mcp && codex mcp login connany
+mkdir -p ~/.claude/skills/connany && curl -fsSL https://connany.example.com/skills/connany/SKILL.md -o ~/.claude/skills/connany/SKILL.md
+```
+
+之后直接提问，例如「查一下 PostHog 昨天的活跃用户」：agent 会列出连接器，需要时发来 PostHog 的连接链接，再搜索并调用工具。第一个系统管理员启用的连接器对所有用户可用。公开文档 `/docs/mcp` 提供带当前部署地址的命令；用户在后台「设置 → 授权应用」中撤销已授权的客户端。详见 [MCP 与 Skill 接入](docs/mcp.md)。
 
 ## Docker 部署
 
@@ -138,6 +151,7 @@ TEST_DATABASE_URL='postgres://connany:connany@localhost:54329/connany' npm run t
 src/          Hono 服务、授权流程、连接器和管理后台
 public/       管理后台、API 文档与品牌资源
 sdk/          无依赖 TypeScript 服务端 SDK
+skills/       通过 MCP 使用 Connany 的 Agent Skill
 migrations/   PostgreSQL 迁移
 scripts/      环境初始化、迁移和管理员命令
 examples/     Agent 接入示例
@@ -149,7 +163,7 @@ tests/        单元、集成及浏览器测试
 ## 当前边界
 
 - 连接器配置由多个项目共享；平台侧授权可能复用，项目内隔离不等于独立的上游 OAuth grant。
-- 当前使用 REST/SDK 和事件轮询，尚无对 Agent 的 MCP 服务端或推送 webhook。每个后台用户拥有独立的工作空间（连接器、项目、用户连接各自隔离），同一工作空间内的项目共用连接器配置。
+- Agent 产品使用 REST/SDK 和事件轮询（尚无推送 webhook）；个人用户使用 MCP Server。每个后台用户拥有独立的工作空间（连接器、项目、用户连接各自隔离），同一工作空间内的项目共用连接器配置。
 - 无自动凭证主密钥轮换、审计数据清理或上游撤销重试 worker。
 - 公开部署需自行配置 HTTPS、数据库备份和入口限流。
 

@@ -3,16 +3,17 @@ import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
 import { readFile } from 'node:fs/promises';
 import { z } from 'zod';
 import { AdminAuth, ConsoleUsers, csrfToken, signupEnabled, passwordSchema, roleSchema, emailSchema, type AdminIdentity } from './auth.js';
-import { layout, loginPage, signupPage, overview, connectorList, connectorHref, projectList, connectionsPage, activityPage, agentDocsPage, docsPage, testPage, projectDetail, usersPage } from './pages.js';
+import { layout, loginPage, signupPage, consentPage, consentErrorPage, overview, connectorList, connectorHref, projectList, connectionsPage, activityPage, testPage, projectDetail, usersPage } from './pages.js';
 import { connectorNames } from '../config.js';
 import { connector as connectorSpec } from '../connectors/catalog.js';
 import { connectorAppInput } from '../connector-store.js';
 import { maxActiveApiKeys, projectInput, publicApiKeyColumns, publicProjectColumns } from '../projects.js';
 import { AppError } from '../errors.js';
-import { apiMarkdown, renderDocs } from '../docs.js';
 import { hash, id, randomToken } from '../crypto.js';
 import { transaction } from '../db.js';
 import { publicConnection, type Service } from '../service.js';
+import { OAuthServer } from '../mcp/oauth.js';
+import { defaultWorkspaceId } from '../workspaces.js';
 
 export function mountAdmin(root: Hono<any>, service: Service) {
   const app = new Hono<{ Variables: { admin: AdminIdentity; csrf: string; sessionToken: string } }>();
@@ -35,6 +36,8 @@ export function mountAdmin(root: Hono<any>, service: Service) {
     if ((path === '/api/login' || path === '/api/signup') && c.req.method === 'POST') return next();
     if (!admin || !token) {
       if (path.startsWith('/api/')) throw new AppError('admin_unauthorized','请登录管理员账号。',401);
+      // An MCP client's authorization continues after signing in.
+      if (path === '/oauth2/authorize') return c.redirect(`/admin/login?next=${encodeURIComponent('/admin/oauth2/authorize' + new URL(c.req.url).search)}`);
       return c.redirect('/admin/login');
     }
     c.set('admin',admin); c.set('sessionToken',token); c.set('csrf',csrfToken(token));
@@ -50,8 +53,10 @@ export function mountAdmin(root: Hono<any>, service: Service) {
   app.get('/assets/admin-preferences.js', async c => { c.header('Content-Type','text/javascript; charset=utf-8'); return c.body(await readFile('public/admin-preferences.js','utf8')); });
   app.get('/assets/admin-i18n.js', async c => { c.header('Content-Type','text/javascript; charset=utf-8'); return c.body(await readFile('public/admin-i18n.js','utf8')); });
   app.get('/assets/admin.js', async c => { c.header('Content-Type','text/javascript; charset=utf-8'); return c.body(await readFile('public/admin.js','utf8')); });
-  app.get('/login', async c => c.html(loginPage(await signupEnabled(service.pool))));
-  app.get('/signup', async c => await signupEnabled(service.pool) ? c.html(signupPage()) : c.redirect('/admin/login'));
+  // Only the consent page is a valid place to continue to after signing in.
+  const next = (c: any) => { const value = c.req.query('next') || ''; return value.startsWith('/admin/oauth2/authorize?') ? value : ''; };
+  app.get('/login', async c => c.html(loginPage(await signupEnabled(service.pool), next(c))));
+  app.get('/signup', async c => await signupEnabled(service.pool) ? c.html(signupPage(next(c))) : c.redirect(next(c) ? `/admin/login?next=${encodeURIComponent(next(c))}` : '/admin/login'));
   app.post('/api/signup', async c => {
     const input = z.object({email:z.string(),password:z.string(),confirm_password:z.string()}).strict().parse(await c.req.json());
     if (input.password !== input.confirm_password) throw new AppError('password_mismatch','两次输入的密码不一致。',400);
@@ -75,12 +80,13 @@ export function mountAdmin(root: Hono<any>, service: Service) {
     deleteCookie(c,'connany_admin',{path:'/admin',secure:secure()});
     return c.json({ok:true});
   });
+  const oauth = () => new OAuthServer(service.pool, base());
   // Everything in the console is scoped to the signed-in user's workspace.
   const ws = (c: any): string => c.get('admin').workspace_id;
   const store = (c: any) => service.connectorStore.in(ws(c));
-  const render = (c: any, title: string, active: string, content: string) => c.html(layout(title,active,c.get('admin').email,c.get('csrf'),content,c.get('admin').role));
+  const render = async (c: any, title: string, active: string, content: string) => c.html(layout(title,active,c.get('admin').email,c.get('csrf'),content,c.get('admin').role,await oauth().grants(c.get('admin').id)));
   app.get('/', async c => {
-    const [connectors, counts] = await Promise.all([store(c).list(), service.pool.query(`SELECT (SELECT count(*) FROM projects WHERE workspace_id=$1)::int AS projects,(SELECT count(*) FROM projects WHERE workspace_id=$1 AND enabled)::int AS active_projects,(SELECT count(*) FROM connections c JOIN projects p ON p.id=c.project_id WHERE p.workspace_id=$1 AND c.status='connected')::int AS connections`,[ws(c)])]);
+    const [connectors, counts] = await Promise.all([store(c).list(), service.pool.query(`SELECT (SELECT count(*) FROM projects WHERE workspace_id=$1 AND kind='api')::int AS projects,(SELECT count(*) FROM projects WHERE workspace_id=$1 AND kind='api' AND enabled)::int AS active_projects,(SELECT count(*) FROM connections c JOIN projects p ON p.id=c.project_id WHERE p.workspace_id=$1 AND c.status='connected')::int AS connections`,[ws(c)])]);
     return render(c,'总览','overview',overview(connectors,counts.rows[0]));
   });
   app.get('/connectors', async c => render(c,'连接器','connectors',connectorList(await store(c).list())));
@@ -120,10 +126,10 @@ export function mountAdmin(root: Hono<any>, service: Service) {
     return (await service.pool.query(`SELECT ${publicProjectColumns.split(',').map(column=>`p.${column}`).join(',')},
       (SELECT count(*) FROM connections c WHERE c.project_id=p.id)::int AS connection_count,
       (SELECT count(*) FROM api_keys k WHERE k.project_id=p.id AND k.revoked_at IS NULL)::int AS api_key_count
-      FROM projects p WHERE p.workspace_id=$1 AND p.id>$2 ORDER BY p.id LIMIT 51`,[workspaceId,after])).rows;
+      FROM projects p WHERE p.workspace_id=$1 AND p.kind='api' AND p.id>$2 ORDER BY p.id LIMIT 51`,[workspaceId,after])).rows;
   }
   async function getProject(workspaceId: string, projectId: string) {
-    const {rows} = await service.pool.query(`SELECT ${publicProjectColumns},(SELECT count(*) FROM connections c WHERE c.project_id=projects.id)::int AS connection_count FROM projects WHERE id=$1 AND workspace_id=$2`,[projectId,workspaceId]);
+    const {rows} = await service.pool.query(`SELECT ${publicProjectColumns},(SELECT count(*) FROM connections c WHERE c.project_id=projects.id)::int AS connection_count FROM projects WHERE id=$1 AND workspace_id=$2 AND kind='api'`,[projectId,workspaceId]);
     if (!rows[0]) throw new AppError('not_found','Project 不存在。',404);
     return rows[0];
   }
@@ -158,7 +164,7 @@ export function mountAdmin(root: Hono<any>, service: Service) {
   app.post('/api/projects/:id', async c => {
     const input = projectInput.parse(await c.req.json());
     const project = await transaction(service.pool,async db => {
-      const {rows} = await db.query(`UPDATE projects SET name=$1,return_urls=COALESCE($2::jsonb,return_urls),updated_at=now() WHERE id=$3 AND workspace_id=$4 RETURNING ${publicProjectColumns}`,[input.name,input.return_urls ? JSON.stringify(input.return_urls) : null,c.req.param('id'),ws(c)]);
+      const {rows} = await db.query(`UPDATE projects SET name=$1,return_urls=COALESCE($2::jsonb,return_urls),updated_at=now() WHERE id=$3 AND workspace_id=$4 AND kind='api' RETURNING ${publicProjectColumns}`,[input.name,input.return_urls ? JSON.stringify(input.return_urls) : null,c.req.param('id'),ws(c)]);
       if (!rows[0]) throw new AppError('not_found','Project 不存在。',404);
       await audit(db,c.get('admin').id,'project.updated',c.req.param('id'));return rows[0];
     });
@@ -167,7 +173,7 @@ export function mountAdmin(root: Hono<any>, service: Service) {
   app.post('/api/projects/:id/status', async c => {
     const input = z.object({enabled:z.boolean()}).strict().parse(await c.req.json());
     const project = await transaction(service.pool,async db => {
-      const {rows} = await db.query(`UPDATE projects SET enabled=$1,updated_at=now() WHERE id=$2 AND workspace_id=$3 RETURNING ${publicProjectColumns}`,[input.enabled,c.req.param('id'),ws(c)]);
+      const {rows} = await db.query(`UPDATE projects SET enabled=$1,updated_at=now() WHERE id=$2 AND workspace_id=$3 AND kind='api' RETURNING ${publicProjectColumns}`,[input.enabled,c.req.param('id'),ws(c)]);
       if (!rows[0]) throw new AppError('not_found','Project 不存在。',404);
       if (!input.enabled) await db.query("UPDATE connect_sessions SET status='error',error_code='project_disabled',state_hash=NULL,browser_hash=NULL,verifier_ciphertext=NULL WHERE project_id=$1 AND status IN ('pending','authorizing')",[c.req.param('id')]);
       await audit(db,c.get('admin').id,input.enabled?'project.enabled':'project.disabled',c.req.param('id'));return rows[0];
@@ -220,6 +226,27 @@ export function mountAdmin(root: Hono<any>, service: Service) {
     await service.pool.query('INSERT INTO admin_audit(admin_id,action,target) VALUES($1,$2,$3)',[c.get('admin').id,'connection.disconnected',c.req.param('id')]);
     return c.json(result);
   });
+  app.get('/oauth2/authorize', async c => {
+    const result = await oauth().validate(c.req.query());
+    if ('page' in result) return c.html(consentErrorPage(result.page), 400);
+    if ('redirect' in result) return c.redirect(result.redirect, 302);
+    return c.html(consentPage(result.client, result.request as any, c.get('admin').email, c.get('csrf')));
+  });
+  app.post('/api/oauth2/authorize', async c => {
+    const { decision, ...query } = z.object({ decision: z.enum(['allow','deny']) }).passthrough().parse(await c.req.json()) as { decision: 'allow' | 'deny' } & Record<string, string>;
+    const result = await oauth().validate(query);
+    if ('page' in result) throw new AppError('invalid_authorization_request', result.page, 400);
+    if ('redirect' in result) return c.json({ redirect_url: result.redirect });
+    if (decision === 'deny') return c.json({ redirect_url: oauth().redirect(result.request, { error: 'access_denied', error_description: 'The user denied the request.' }) });
+    const redirectUrl = await oauth().approve(c.get('admin'), result.request);
+    await audit(service.pool,c.get('admin').id,'mcp.client_authorized',result.client.client_name);
+    return c.json({ redirect_url: redirectUrl });
+  });
+  app.post('/api/mcp/grants/:id/revoke', async c => {
+    if (!await oauth().revokeGrant(c.get('admin').id, c.req.param('id'))) throw new AppError('not_found','授权不存在。',404);
+    await audit(service.pool,c.get('admin').id,'mcp.client_revoked',c.req.param('id'));
+    return c.json({ok:true});
+  });
   app.get('/users', async c => render(c,'用户管理','users',usersPage(await users.list(),c.get('admin'),await signupEnabled(service.pool))));
   app.post('/api/settings/signup', async c => {
     const {enabled} = z.object({enabled:z.boolean()}).strict().parse(await c.req.json());
@@ -254,25 +281,9 @@ export function mountAdmin(root: Hono<any>, service: Service) {
     const selected = z.enum(connectorNames).optional().parse(c.req.query('connector')) || connectors.find(p=>p.enabled)?.name || 'notion';
     return render(c,'连接测试','test',testPage(connectors, selected));
   });
-  const agentPrompt = async () => `请在当前 agent 产品中实现 Connany 连接功能，先检查现有用户认证、后端路由和工具执行器，再按下方协议完成实现和验证。
-服务地址：${base()}
-环境变量：CONNANY_BASE_URL=${base()}；CONNANY_API_KEY 由管理员单独配置到后端，不要询问或输出密钥值。
-${new URL(base()).hostname === 'localhost' || new URL(base()).hostname === '127.0.0.1' ? '注意：当前是本地服务地址，仅运行在同一台机器上的后端可直接使用。远程部署需换成可访问的 HTTPS 服务地址，并同步配置平台 OAuth callback。' : ''}
-需要实现：设置页的连接器列表与连接按钮、授权结果确认、已连接账号管理（检查、重新授权、断开、补充资源访问），以及对话中的工具调用：每轮对话按当前用户的有效连接注册工具，未连接时在对话中展示授权按钮，授权失效时引导重新连接。用户 ID 必须来自服务端登录会话，工具执行器固定用户和连接，模型只能填写工具参数。优先使用 SDK 的 createAgentTools；写操作由后端按产品策略开启并在执行前向用户确认。后台任务轮询 GET /v1/events 同步状态变化。当前是 HTTP API，不是 MCP 端点；不要把管理员页面当成无需登录的 API 文档地址。
-按下方文档第 7 节的清单完成验收。
-
-` + (await readFile('docs/agent-integration.md','utf8')).replaceAll('https://connect.your-domain.com',base());
-  app.get('/docs', async c => render(c,'API 文档','guide',docsPage(await Promise.all(['en','zh-CN'].map(async language => ({ language, ...renderDocs(await apiMarkdown(base(),language),language,`docs-${language}`) }))))));
-  app.get('/docs/agent', async c => render(c,'Agent 接入指南','guide',agentDocsPage(renderDocs((await readFile('docs/agent-integration.md','utf8')).replaceAll('https://connect.your-domain.com',base()),'zh-CN','agent'),await agentPrompt())));
-  app.get('/guide', c => c.redirect('/admin/docs/agent', 301));
-  app.get('/guide/sdk', async c => {
-    c.header('Content-Type','text/plain; charset=utf-8'); c.header('Content-Disposition','attachment; filename="connany-client.ts"');
-    return c.body(await readFile('sdk/client.ts','utf8'));
-  });
-  app.get('/guide/download', async c => {
-    c.header('Content-Type','text/markdown; charset=utf-8');c.header('Content-Disposition','attachment; filename="connany-agent-integration.md"');
-    return c.body(await agentPrompt());
-  });
+  // Documentation is public at /docs; keep the old console links working.
+  for (const [from, to] of [['/docs','/docs'],['/docs/agent','/docs/agent'],['/guide','/docs/agent'],['/mcp','/docs/mcp'],['/guide/download','/docs/agent.md'],['/guide/sdk','/docs/sdk.ts']])
+    app.get(from, c => c.redirect(to, 301));
   root.get('/admin/', c => c.redirect('/admin'));
   root.route('/admin',app);
 }

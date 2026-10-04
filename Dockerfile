@@ -17,6 +17,7 @@ COPY --from=build /app/dist ./dist
 COPY migrations ./migrations
 COPY public ./public
 COPY docs ./docs
+COPY skills ./skills
 COPY sdk ./sdk
 COPY LICENSE THIRD_PARTY_NOTICES.md ./
 USER node

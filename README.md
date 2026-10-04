@@ -5,7 +5,7 @@
 
 Connany is an open-source, multi-tenant connector service for agent applications. It manages user authorization, connections, and credentials so your agent backend can list tools and work with authorized data through a REST API or TypeScript SDK, without handling provider tokens.
 
-It ships with 25 connectors across collaboration, development, databases, analytics, payments and design. Every connector except GitHub uses the provider's official hosted MCP server and is enabled with one click: Connany registers the OAuth client automatically. MCP is used to connect to upstream services; Connany exposes a REST API and SDK to agents, rather than hosting general-purpose MCP servers.
+It ships with 25 connectors across collaboration, development, databases, analytics, payments and design. Every connector except GitHub uses the provider's official hosted MCP server and is enabled with one click: Connany registers the OAuth client automatically. Two ways in: agent products integrate through a REST API and TypeScript SDK, and individuals add Connany to Claude Code, Codex or Cursor as an MCP server (with an agent skill) to use the connectors with their own accounts.
 
 ![Connany admin console: connectors grouped by category, with status and category filters](docs/images/connectors.png)
 
@@ -16,6 +16,7 @@ It ships with 25 connectors across collaboration, development, databases, analyt
 - **Project isolation:** every API key belongs to a project; user data is scoped to `project_id + external_user_id`.
 - **Connection management:** multiple accounts and workspaces, listing, active checks, reconnection, disconnection, and upstream revocation retries.
 - **Tool listing and calls:** list the official MCP tools a user's connection can use with `GET /v1/connections/{id}/tools` (or browse each connector's catalog with `GET /v1/tools`), inspect parameter schemas and read/write metadata, and call them with `POST /v1/connections/{id}/tools/{name}/call`. The SDK can expose just two tools to a model: `list_tools` and `call_tool`.
+- **MCP server and skill:** Connany is itself a remote MCP server with OAuth 2.1 sign-in (dynamic client registration, PKCE). Users add it once to Claude Code, Codex or Cursor, connect accounts from the conversation, and call tools through six meta-tools; reads and writes are separate tools so clients can confirm every change. A downloadable skill teaches the agent the workflow.
 - **Event feed:** one project-wide feed (`GET /v1/events`) reports connections, reauthorization needs, disconnections, and tool calls for every user.
 - **Credential protection:** AES-256-GCM encryption for connector and user credentials, hashed API keys, and database transaction locks to coordinate token refresh and execution.
 
@@ -36,8 +37,8 @@ npm run dev   # or: make dev
 
 Enter an administrator password of at least 8 characters when prompted. `npm run setup` creates `.env` with a random encryption key without overwriting an existing file. The root `compose.yaml` starts only PostgreSQL; its default password is for local development.
 
-- Admin console: <http://localhost:3000/admin>; **Docs** in the sidebar holds the API docs and the agent integration guide.
-- Public API docs: <http://localhost:3000/docs>, with English and Chinese content, copyable examples, and Markdown/SDK downloads.
+- Admin console: <http://localhost:3000/admin>
+- Public docs (no sign-in): <http://localhost:3000/docs> (API), `/docs/agent` (agent integration guide) and `/docs/mcp` (MCP and skill), with copyable examples and Markdown/SDK downloads. **Docs** in the console sidebar opens them.
 - Health check: <http://localhost:3000/health>
 
 To use an existing database, set `DATABASE_URL` in `.env` and skip the Docker step. If the port is occupied, update both `PORT` and `PUBLIC_BASE_URL`. For daily development, run `make dev`: it installs dependencies when the lockfile changes, starts PostgreSQL, applies migrations, and runs the server with hot reload (Docker is only used when `DATABASE_URL` points to the compose database on port 54329). Server changes restart the process, while static asset changes need a browser refresh.
@@ -80,6 +81,18 @@ Keep API keys on the backend. The SDK’s two-tool adapter defaults to read-only
 - [Agent integration guide (Chinese)](docs/agent-integration.md)
 - [REST API reference](docs/api.en.md) · [中文 API 文档](docs/api.md)
 - [Admin console guide (Chinese)](docs/admin.md)
+
+## Use Connany from Claude Code or Codex
+
+Any console user (enable **Open registration** under **Users** to let people sign up) can add Connany to their agent:
+
+```bash
+claude mcp add --transport http connany https://connany.example.com/mcp   # then run /mcp to sign in
+codex mcp add connany --url https://connany.example.com/mcp && codex mcp login connany
+mkdir -p ~/.claude/skills/connany && curl -fsSL https://connany.example.com/skills/connany/SKILL.md -o ~/.claude/skills/connany/SKILL.md
+```
+
+Then ask, for example, "how many active users did PostHog record yesterday?". The agent lists connectors, sends a link to connect PostHog if needed, searches the tools and calls them with the user's account. Connectors enabled by the first administrator are available to every user. The public docs at `/docs/mcp` show these commands with your deployment's address; users revoke authorized clients under **Settings → Authorized apps**. See the [MCP and skill guide](docs/mcp.en.md) ([中文](docs/mcp.md)).
 
 ## Docker deployment
 
@@ -137,6 +150,7 @@ Browser tests use simulated upstream services and do not replace authorization t
 src/          Hono service, authorization flows, connectors, and admin console
 public/       Admin console assets, API docs assets, and branding
 sdk/          Dependency-free TypeScript backend SDK
+skills/       Agent skill for using Connany through MCP
 migrations/   PostgreSQL migrations
 scripts/      Environment setup, migrations, and administrator commands
 examples/     Agent integration examples
@@ -148,7 +162,7 @@ tests/        Unit, integration, and browser tests
 ## Current limitations
 
 - Connector configuration is shared across projects, and upstream authorization may be reused. Project isolation does not imply separate upstream OAuth grants.
-- The current interfaces are REST/SDK and event polling. There is no agent-facing MCP server or push webhook delivery yet. Each console user has their own workspace with its own connectors, projects and connections; projects within a workspace share its connector configuration.
+- Agent products use REST/SDK and event polling (no push webhooks yet); individuals use the MCP server. Each console user has their own workspace with its own connectors, projects and connections; projects within a workspace share its connector configuration.
 - There is no automatic credential master-key rotation, audit retention cleanup, or background worker for upstream revocation retries.
 - Public deployments must configure HTTPS, database backups, and ingress rate limiting.
 

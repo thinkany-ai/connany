@@ -114,7 +114,7 @@ test('admin browser configures three shared connectors, creates two projects, ro
     await page.screenshot({path:'artifacts/admin-test.png',fullPage:true});
     await page.setViewportSize({width:390,height:844});
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
-    await page.goto(`${settings.publicBaseUrl}/admin/guide`);
+    await page.goto(`${settings.publicBaseUrl}/admin/guide`);await page.waitForURL(/\/docs\/agent/);
     const prompt=await page.locator('#agent-prompt').inputValue();
     assert(prompt.includes(settings.publicBaseUrl));assert(prompt.includes('/v1/connections/{id}/tools'));assert(!prompt.includes(issued[0]));
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);

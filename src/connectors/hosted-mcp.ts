@@ -135,8 +135,8 @@ export class HostedMcp {
     const rpc=await this.session(credential);
     return rpc('tools/call',{name:tool,arguments:args});
   }
-  async call(name: string, input: unknown, credential: Credentials) {
-    if (!(await this.tools(credential)).some(t=>t.name===name)) throw new AppError('tool_not_found','List available tools before calling.');
+  async call(name: string, input: unknown, credential: Credentials, known = false) {
+    if (!known && !(await this.tools(credential)).some(t=>t.name===name)) throw new AppError('tool_not_found','List available tools before calling.');
     const rpc=await this.session(credential);
     const result=await rpc('tools/call',{name:name.slice(this.connector.length + 1),arguments:input});
     if(result.isError)throw new AppError('mcp_tool_error','The MCP server could not complete this tool call.',422,{result});

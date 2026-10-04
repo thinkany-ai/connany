@@ -6,8 +6,9 @@ import { event, transaction } from './db.js';
 import { AppError, UpstreamError } from './errors.js';
 import { restTools, toolNamePattern, type ToolName, type Credentials, ConnectorRuntime } from './connectors/index.js';
 import { connector as connectorSpec } from './connectors/catalog.js';
+import { defaultWorkspaceId } from './workspaces.js';
 
-export interface Project { id: string; workspace_id: string; name: string; return_urls: string[]; api_key_id: string }
+export interface Project { id: string; workspace_id: string; name: string; return_urls: string[]; api_key_id: string | null; kind?: 'api' | 'personal' }
 export interface Connection {
   id: string; project_id: string; external_user_id: string; connector: ConnectorName; connector_app_id: string | null;
   status: string; identity: Record<string, any>; credential_ciphertext: string | null;
@@ -38,11 +39,35 @@ export class Service {
     const { last_used_at: lastUsed, ...project } = result.rows[0];
     // Coarse usage tracking: at most one write per key per minute.
     if (!lastUsed || Date.now() - new Date(lastUsed).getTime() > 60000) await this.pool.query('UPDATE api_keys SET last_used_at=now() WHERE id=$1', [project.api_key_id]);
+    await this.rateLimit(project.id);
+    return project;
+  }
+  async rateLimit(projectId: string) {
     const rate = await this.pool.query(`INSERT INTO rate_limits(project_id, window_start, count) VALUES($1, date_trunc('minute', now()), 1)
       ON CONFLICT(project_id) DO UPDATE SET window_start=date_trunc('minute', now()),
-      count=CASE WHEN rate_limits.window_start=date_trunc('minute', now()) THEN rate_limits.count+1 ELSE 1 END RETURNING count`, [project.id]);
+      count=CASE WHEN rate_limits.window_start=date_trunc('minute', now()) THEN rate_limits.count+1 ELSE 1 END RETURNING count`, [projectId]);
     if (rate.rows[0].count > 120) throw new AppError('rate_limited', 'Project limit: 120 requests per minute.', 429, { retry_after: 60 });
-    return project;
+  }
+  /**
+   * The personal project of a console user: their own connections, used through MCP clients.
+   * Created on first use in the user's workspace; external_user_id is the user's id.
+   */
+  async personalProject(user: { id: string; workspace_id: string }): Promise<Project> {
+    const select = "SELECT id,workspace_id,name,return_urls,NULL AS api_key_id,kind FROM projects WHERE owner_id=$1 AND kind='personal'";
+    const existing = (await this.pool.query(select, [user.id])).rows[0];
+    if (existing) return existing;
+    await this.pool.query(`INSERT INTO projects(id,workspace_id,name,return_urls,kind,owner_id) VALUES($1,$2,'个人 MCP','[]','personal',$3)
+      ON CONFLICT (owner_id) WHERE kind='personal' DO NOTHING`, [id('proj'), user.workspace_id, user.id]);
+    return (await this.pool.query(select, [user.id])).rows[0];
+  }
+  /**
+   * Workspace whose connector configuration serves a project. Personal projects use the
+   * user's own connector when enabled, otherwise the platform's (the default workspace).
+   */
+  async connectorWorkspace(project: { workspace_id: string; kind?: string }, connector: ConnectorName) {
+    if (project.kind !== 'personal' || project.workspace_id === defaultWorkspaceId) return project.workspace_id;
+    const { rowCount } = await this.pool.query('SELECT 1 FROM connectors WHERE workspace_id=$1 AND name=$2 AND enabled AND active_app_id IS NOT NULL', [project.workspace_id, connector]);
+    return rowCount ? project.workspace_id : defaultWorkspaceId;
   }
   async workspaceOf(projectId: string, db: pg.Pool | pg.PoolClient = this.pool): Promise<string> {
     const row = (await db.query('SELECT workspace_id FROM projects WHERE id=$1', [projectId])).rows[0];
@@ -73,7 +98,7 @@ export class Service {
     return this.getConnection(c.project_id,c.external_user_id,c.id);
   }
   async createSession(project: Project, input: { external_user_id: string; connector: ConnectorName; return_url?: string }, reconnectId?: string) {
-    const active = await this.connectorStore.in(project.workspace_id).active(input.connector);
+    const active = await this.connectorStore.in(await this.connectorWorkspace(project, input.connector)).active(input.connector);
     if (reconnectId && connectorSpec(input.connector).auth === 'mcp') {
       const old = await this.getConnection(project.id,input.external_user_id,reconnectId);
       if (old.identity.transport !== 'mcp') throw new AppError('new_connection_required','Create a new MCP connection; legacy API connections cannot be reconnected.',409);
@@ -85,14 +110,14 @@ export class Service {
     return { id: sessionId, status: 'pending', connector: input.connector, connect_url: `${this.runtime.config.publicBaseUrl}/connect/${token}`, expires_at: expiresAt };
   }
   async getLink(token: string) {
-    const { rows } = await this.pool.query(`SELECT s.*, p.name AS project_name, p.workspace_id AS project_workspace_id FROM connect_sessions s JOIN projects p ON p.id=s.project_id WHERE s.link_hash=$1 AND p.enabled=true`, [hash(token)]);
+    const { rows } = await this.pool.query(`SELECT s.*, p.name AS project_name, p.workspace_id AS project_workspace_id, p.kind AS project_kind FROM connect_sessions s JOIN projects p ON p.id=s.project_id WHERE s.link_hash=$1 AND p.enabled=true`, [hash(token)]);
     const s = rows[0];
     if (!s || new Date(s.expires_at).getTime() <= Date.now() || s.status !== 'pending') throw new AppError('session_unavailable', 'This connection link has expired or was already used. Request a new link from your agent.', 410);
     return s;
   }
   async begin(token: string) {
     const s = await this.getLink(token);
-    await this.connectorStore.in(s.project_workspace_id).active(s.connector);
+    await this.connectorStore.in(await this.connectorWorkspace({ workspace_id: s.project_workspace_id, kind: s.project_kind }, s.connector)).active(s.connector);
     const runtime = await this.connectorStore.resolve(s.connector, s.connector_app_id);
     const state = randomToken(); const browser = randomToken(); const verifier = randomToken();
     const url = runtime.authorizeUrl(s.connector, state, verifier);
@@ -213,7 +238,11 @@ export class Service {
             await db.query('UPDATE connections SET identity=identity || $1::jsonb,updated_at=now() WHERE id=$2',[JSON.stringify(names),c.id]);
             return names;
           }
-          if (tool !== `${c.connector}.__discover`) return runtime.execute(tool, parsed, credential);
+          if (tool !== `${c.connector}.__discover`) {
+            // A tool in the cached catalog is called directly instead of listing upstream tools first.
+            const catalog = definition ? null : await this.connectorStore.in(await this.workspaceOf(project, db)).catalog(c.connector);
+            return runtime.execute(tool, parsed, credential, !!catalog?.some(t => t.name === tool));
+          }
           const tools = await runtime.mcp(c.connector).tools(credential);
           await this.connectorStore.in(await this.workspaceOf(project, db)).saveTools(c.connector, tools, db);
           return tools;

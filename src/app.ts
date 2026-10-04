@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises';
-import { apiMarkdown, docsPage } from './docs.js';
+import { agentPrompt, apiMarkdown, docsMarkdown, docsPage, type DocsPageName } from './docs.js';
 import { favicon } from './brand.js';
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
@@ -12,8 +12,12 @@ import { restToolCatalog, restTools, toolNamePattern, type ToolName } from './co
 import { publicConnection, publicSession, Service, type Project } from './service.js';
 import type { ToolDefinition } from './connector-store.js';
 import { mountAdmin } from './admin/routes.js';
+import { attempt } from './admin/auth.js';
 import { id } from './crypto.js';
 import { returnUrlSchema } from './projects.js';
+import { searchTools } from './tool-search.js';
+import { OAuthError, OAuthServer, mcpScope } from './mcp/oauth.js';
+import { McpServer } from './mcp/server.js';
 import { categoryTitles, connectorCatalog, connectorCategories, connector as connectorSpec, locales, pickLocale, type ConnectorDefinition } from './connectors/catalog.js';
 
 const userSchema = z.string().min(1).max(200);
@@ -32,7 +36,10 @@ export function createApp(service: Service) {
     if (!(c.req.path === '/docs' || c.req.path.startsWith('/docs/'))) await service.initialize();
     await next();
   });
-  app.use('*', bodyLimit({ maxSize: 32 * 1024, onError: c => c.json({ error: { code: 'body_too_large', message: 'Request exceeds 32 KB.' } }, 413) }));
+  const defaultLimit = bodyLimit({ maxSize: 32 * 1024, onError: c => c.json({ error: { code: 'body_too_large', message: 'Request exceeds 32 KB.' } }, 413) });
+  // MCP tool calls can carry documents (a page body, an issue description).
+  const mcpLimit = bodyLimit({ maxSize: 1024 * 1024, onError: c => c.json({ jsonrpc: '2.0', id: null, error: { code: -32600, message: 'Request exceeds 1 MB.' } }, 413) });
+  app.use('*', (c, next) => c.req.path === '/mcp' ? mcpLimit(c, next) : defaultLimit(c, next));
   app.onError((error, c) => {
     const validation = error instanceof z.ZodError || error instanceof SyntaxError;
     const known = error instanceof AppError;
@@ -44,15 +51,20 @@ export function createApp(service: Service) {
     if (c.req.path.startsWith('/connect/') || c.req.path.startsWith('/oauth/')) return c.html(errorPage(message), status as 400);
     return c.json({ error: { code, message, ...(known && error.details ? { details: error.details } : {}), ...(error instanceof z.ZodError ? { fields: error.issues.map(i => ({ path: i.path, message: i.message })) } : {}) }, request_id: c.get('requestId') }, status as 400);
   });
-  app.get('/docs', async c => {
-    c.header('Content-Security-Policy', "default-src 'none'; style-src 'self'; script-src 'self'; img-src 'self'; base-uri 'none'; frame-ancestors 'none'");
-    return c.html(await docsPage(service.runtime.config.publicBaseUrl,c.req.query('lang')));
-  });
+  const docsCsp = "default-src 'none'; style-src 'self'; script-src 'self'; img-src 'self'; base-uri 'none'; frame-ancestors 'none'";
+  const docs = (page: DocsPageName) => async (c: any) => { c.header('Content-Security-Policy', docsCsp); return c.html(await docsPage(service.runtime.config.publicBaseUrl, c.req.query('lang'), page)); };
+  app.get('/docs', docs('api'));
+  app.get('/docs/agent', docs('agent'));
+  app.get('/docs/mcp', docs('mcp'));
   app.get('/docs/', c => c.redirect('/docs', 302));
-  app.get('/docs/api.md', async c => {
+  const markdown = (filename: string, body: (lang?: string) => Promise<string>) => async (c: any) => {
     c.header('Content-Type','text/markdown; charset=utf-8');
-    return c.body(await apiMarkdown(service.runtime.config.publicBaseUrl,c.req.query('lang')));
-  });
+    if (filename) c.header('Content-Disposition', `attachment; filename="${filename}"`);
+    return c.body(await body(c.req.query('lang')));
+  };
+  app.get('/docs/api.md', markdown('', lang => apiMarkdown(service.runtime.config.publicBaseUrl, lang)));
+  app.get('/docs/agent.md', markdown('connany-agent-integration.md', () => agentPrompt(service.runtime.config.publicBaseUrl)));
+  app.get('/docs/mcp.md', markdown('', lang => docsMarkdown('mcp', service.runtime.config.publicBaseUrl, lang)));
   app.get('/docs/sdk.ts', async c => {
     c.header('Content-Type','text/plain; charset=utf-8');
     c.header('Content-Disposition','attachment; filename="connany-client.ts"');
@@ -66,8 +78,14 @@ export function createApp(service: Service) {
     c.header('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'");
     return c.body(connectorCatalog[name].icon);
   });
+  // The agent skill, with this deployment's MCP URL filled in.
+  app.get('/skills/connany/SKILL.md', async c => {
+    c.header('Content-Type', 'text/markdown; charset=utf-8');
+    return c.body((await readFile('skills/connany/SKILL.md', 'utf8')).replaceAll('{{CONNANY_MCP_URL}}', `${service.runtime.config.publicBaseUrl}/mcp`));
+  });
   app.get('/favicon.svg', c => { c.header('Content-Type', 'image/svg+xml'); return c.body(favicon); });
   app.get('/', c => c.redirect('/admin', 302));
+  mountMcp(app, service);
   app.get('/health', async c => { await service.pool.query('SELECT 1'); return c.json({ status: 'ok', version: '0.1.0' }); });
   app.use('/v1/*', async (c, next) => {
     const auth = c.req.header('Authorization');
@@ -129,13 +147,7 @@ export function createApp(service: Service) {
   app.delete('/v1/connections/:id', async c => c.json(await service.disconnect(c.get('project').id, userSchema.parse(c.req.query('external_user_id')), c.req.param('id'))));
   const toolName = z.string().max(150).refine(name=>Object.hasOwn(restTools,name) || toolNamePattern.test(name) && !/\.__(discover|identity)$/.test(name)).transform(name=>name as ToolName);
   const toolQuery = {query:z.string().max(500).optional(),limit:z.coerce.number().int().min(1).max(100).default(20),offset:z.coerce.number().int().min(0).default(0),read_only:z.enum(['true','false']).transform(v=>v==='true').optional()};
-  const pageTools = (tools: ToolDefinition[], input: {query?: string; limit: number; offset: number; read_only?: boolean}) => {
-    const words=(input.query || '').toLowerCase().split(/\s+/).filter(Boolean);
-    const exact = (input.query || '').trim().toLowerCase();
-    const matches=tools.filter(t=>(input.read_only===undefined || t.read_only===input.read_only) && (!words.length || words.some(w=>(t.name+' '+t.description).toLowerCase().includes(w))))
-      .sort((a,b)=>Number(b.name.toLowerCase()===exact)-Number(a.name.toLowerCase()===exact) || a.connector.localeCompare(b.connector) || a.name.localeCompare(b.name));
-    return {data:matches.slice(input.offset,input.offset+input.limit),total:matches.length,next_offset:input.offset+input.limit<matches.length?input.offset+input.limit:null};
-  };
+  const pageTools = searchTools;
   // Catalog view: what each enabled connector offers, independent of users.
   app.get('/v1/tools', async c => {
     const input = z.object({connector:z.enum(connectorNames).optional(),...toolQuery}).strict().parse(c.req.query());
@@ -208,4 +220,78 @@ export function createApp(service: Service) {
   mountAdmin(app, service);
   app.notFound(c => c.json({ error: { code: 'not_found', message: 'Route not found.' } }, 404));
   return app;
+}
+
+/**
+ * Connany as an MCP server: OAuth discovery and endpoints, then the Streamable HTTP endpoint.
+ * Bearer tokens only (no cookies), so cross-origin requests are allowed for browser clients.
+ */
+function mountMcp(app: Hono<any>, service: Service) {
+  // Read lazily: tests mount the app with partial services.
+  const base = () => service.runtime.config.publicBaseUrl;
+  const server = () => new OAuthServer(service.pool, base());
+  const mcp = new McpServer(service);
+  const cors = ['/.well-known/*', '/oauth2/register', '/oauth2/token', '/oauth2/revoke', '/mcp'];
+  for (const path of cors) app.use(path, async (c, next) => {
+    c.header('Access-Control-Allow-Origin', '*');
+    c.header('Access-Control-Allow-Headers', 'Authorization, Content-Type, Mcp-Session-Id, MCP-Protocol-Version, Last-Event-ID');
+    c.header('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+    c.header('Access-Control-Expose-Headers', 'WWW-Authenticate, Mcp-Session-Id');
+    if (c.req.method === 'OPTIONS') return c.body(null, 204);
+    await next();
+  });
+  app.get('/.well-known/oauth-protected-resource', c => c.json(server().protectedResource()));
+  app.get('/.well-known/oauth-protected-resource/mcp', c => c.json(server().protectedResource()));
+  app.get('/.well-known/oauth-authorization-server', c => c.json(server().metadata()));
+  app.get('/.well-known/oauth-authorization-server/mcp', c => c.json(server().metadata()));
+  const oauthError = (c: any, error: unknown) => {
+    if (!(error instanceof OAuthError)) throw error;
+    return c.json({ error: error.error, error_description: error.description }, error.status);
+  };
+  const form = async (c: any): Promise<Record<string, string>> => {
+    const type = c.req.header('Content-Type') || '';
+    const fields: Record<string, string> = type.includes('application/json') ? await c.req.json() : Object.fromEntries(new URLSearchParams(await c.req.text()));
+    // Public clients may still send their id with HTTP Basic and an empty secret.
+    const basic = c.req.header('Authorization');
+    if (!fields.client_id && basic?.startsWith('Basic ')) fields.client_id = decodeURIComponent(Buffer.from(basic.slice(6), 'base64').toString().split(':')[0]);
+    return fields;
+  };
+  app.post('/oauth2/register', async c => {
+    try {
+      if (await attempt(service.pool, 'oauth_register') > 200) throw new OAuthError('temporarily_unavailable', 'Too many registrations. Retry later.', 429);
+      return c.json(await server().register(await c.req.json()), 201);
+    } catch (error) { if (error instanceof SyntaxError) return c.json({ error: 'invalid_client_metadata', error_description: 'Send JSON.' }, 400); return oauthError(c, error); }
+  });
+  // The user signs in and approves the client in the console.
+  app.get('/oauth2/authorize', c => c.redirect(`/admin/oauth2/authorize?${new URL(c.req.url).searchParams}`, 302));
+  app.post('/oauth2/token', async c => {
+    try { return c.json(await server().token(await form(c))); } catch (error) { return oauthError(c, error); }
+  });
+  app.post('/oauth2/revoke', async c => {
+    const fields = await form(c);
+    if (fields.token) await server().revoke(fields.token);
+    return c.body(null, 200);
+  });
+  const unauthorized = (c: any) => {
+    c.header('WWW-Authenticate', `Bearer resource_metadata="${base()}/.well-known/oauth-protected-resource/mcp", scope="${mcpScope}"`);
+    return c.json({ jsonrpc: '2.0', id: null, error: { code: -32001, message: 'Sign in to Connany: authorization required.' } }, 401);
+  };
+  app.post('/mcp', async c => {
+    const auth = c.req.header('Authorization');
+    const user = auth?.startsWith('Bearer ') ? await server().verify(auth.slice(7)) : null;
+    if (!user) return unauthorized(c);
+    let message: unknown;
+    try { message = await c.req.json(); } catch { return c.json({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } }, 400); }
+    if (Array.isArray(message)) return c.json({ jsonrpc: '2.0', id: null, error: { code: -32600, message: 'Batch requests are not supported.' } }, 400);
+    try {
+      const response = await mcp.handle(user, message);
+      return response ? c.json(response) : c.body(null, 202);
+    } catch (error) {
+      console.error(JSON.stringify({ level: 'error', request_id: c.get('requestId'), code: 'mcp_internal_error' }));
+      return c.json({ jsonrpc: '2.0', id: (message as any)?.id ?? null, error: { code: -32603, message: 'Internal error' } });
+    }
+  });
+  // Stateless server: no server-initiated stream and no sessions to end.
+  app.get('/mcp', c => { c.header('Allow', 'POST'); return c.body(null, 405); });
+  app.delete('/mcp', c => { c.header('Allow', 'POST'); return c.body(null, 405); });
 }

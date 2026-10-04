@@ -18,6 +18,8 @@
 !public/**
 !docs/
 !docs/**
+!skills/
+!skills/**
 !LICENSE
 !THIRD_PARTY_NOTICES.md
 !Dockerfile

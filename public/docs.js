@@ -17,6 +17,13 @@
     catch { const range=document.createRange();range.selectNodeContents(code);getSelection().removeAllRanges();getSelection().addRange(range);status.textContent=language==='zh-CN'?'已选中，请手动复制':'Text selected. Copy it manually.'; }
     clearTimeout(timer);timer=setTimeout(()=>status.textContent='',2500);
   }));
+  document.querySelectorAll('[data-copy-target]').forEach(button => button.addEventListener('click',async()=>{
+    const source=document.getElementById(button.dataset.copyTarget);
+    const status=document.getElementById('copy-status');
+    try { await navigator.clipboard.writeText(source.value);status.textContent=language==='zh-CN'?'已复制':'Copied'; }
+    catch { status.textContent=language==='zh-CN'?'复制失败，请下载 Markdown':'Copy failed. Download the Markdown instead.'; }
+    clearTimeout(timer);timer=setTimeout(()=>status.textContent='',2500);
+  }));
   const links=[...document.querySelectorAll('.docs-layout>nav a')];
   const sections=[...document.querySelectorAll('.docs-section')];
   function update() {

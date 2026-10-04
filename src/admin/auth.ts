@@ -36,7 +36,7 @@ export async function createAdmin(pool: pg.Pool, email: string, password: string
   });
 }
 /** Counts attempts per bucket in a 15-minute window; returns the count including this attempt. */
-async function attempt(db: pg.Pool | pg.PoolClient, bucket: string) {
+export async function attempt(db: pg.Pool | pg.PoolClient, bucket: string) {
   const { rows } = await db.query(`INSERT INTO admin_login_limits(bucket,window_start,count) VALUES($1,now(),1)
     ON CONFLICT(bucket) DO UPDATE SET count=CASE WHEN admin_login_limits.window_start < now()-interval '15 minutes' THEN 1 ELSE admin_login_limits.count+1 END,
     window_start=CASE WHEN admin_login_limits.window_start < now()-interval '15 minutes' THEN now() ELSE admin_login_limits.window_start END RETURNING count`,[bucket]);
