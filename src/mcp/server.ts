@@ -18,7 +18,7 @@ import type { OAuthUser } from './oauth.js';
 export const protocolVersions = ['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05'];
 const instructions = `Connany connects this agent to the user's accounts in third-party services (Notion, Linear, GitHub, Stripe, PostHog, Sentry, ...).
 1. Call list_connectors to see which accounts are connected and which services can be connected.
-2. If the needed service is not connected, call connect and show the returned link to the user. Wait until they say they finished, then call list_connectors again.
+2. If the needed service is not connected, call connect and show the returned link to the user in your reply. Then call wait_for_connection right away: it returns as soon as the user has authorized in the browser, so continue with their request without asking them to confirm.
 3. Call search_tools with keywords to find a tool, then describe_tool for its input schema.
 4. Use call_read_tool for read-only tools. Use call_write_tool only for changes the user asked for, and confirm first.`;
 
@@ -35,6 +35,8 @@ export const tools = [
   { name: 'connect', title: 'Connect an account', description: 'Create a link the user opens in a browser to connect an account of a service (or to reconnect an expired connection). Show the link to the user and wait for them to finish.',
     inputSchema: object({ connector: { type: 'string', enum: connectorNames, description: 'Service name from list_connectors.' }, connection_id: { type: 'string', description: 'Reconnect this existing connection instead of adding a new account.' } }, ['connector']),
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false } },
+  { name: 'wait_for_connection', title: 'Wait for a connection', description: 'After showing a link from connect, wait until the user finishes authorizing in the browser (up to about 45 seconds per call). Returns the new connection when done; if still pending, call it again.',
+    inputSchema: object({ session_id: { type: 'string', description: 'session_id returned by connect.' } }, ['session_id']), annotations: { readOnlyHint: true, openWorldHint: false } },
   { name: 'search_tools', title: 'Search tools', description: 'Search the tools available through the user\'s connected accounts by keywords (English works best). Returns tool names, whether they only read, and short descriptions.',
     inputSchema: object({ query: { type: 'string', description: 'Keywords, e.g. "issues list" or "web traffic".' }, connector: { type: 'string', enum: connectorNames, description: 'Only tools of this service.' }, limit: { type: 'integer', minimum: 1, maximum: 50, default: 20 }, offset: { type: 'integer', minimum: 0, default: 0 } }),
     annotations: { readOnlyHint: true, openWorldHint: false } },
@@ -51,6 +53,8 @@ const listInput = z.object({}).passthrough();
 const connectInput = z.object({ connector: z.enum(connectorNames), connection_id: z.string().max(200).optional() });
 const searchInput = z.object({ query: z.string().max(500).optional(), connector: z.enum(connectorNames).optional(), limit: z.number().int().min(1).max(50).default(20), offset: z.number().int().min(0).default(0) });
 const nameInput = z.object({ name: z.string().max(150) });
+const waitInput = z.object({ session_id: z.string().max(200) });
+const waitSeconds = 45;
 const callArgs = z.object({ name: z.string().max(150), arguments: z.record(z.string(), z.unknown()).default({}), connection_id: z.string().max(200).optional() });
 
 export class McpServer {
@@ -84,6 +88,7 @@ export class McpServer {
       switch (name) {
         case 'list_connectors': listInput.parse(args); return { content: [text(await this.overview(user, project))] };
         case 'connect': return { content: [text(await this.connect(user, project, connectInput.parse(args)))] };
+        case 'wait_for_connection': return { content: [text(await this.wait(user, project, waitInput.parse(args).session_id))] };
         case 'search_tools': return { content: [text(await this.search(user, project, searchInput.parse(args)))] };
         case 'describe_tool': return { content: [text(await this.describe(user, project, nameInput.parse(args).name))] };
         default: return await this.run(user, project, callArgs.parse(args), name === 'call_write_tool');
@@ -128,10 +133,28 @@ export class McpServer {
       const existing = await this.service.getConnection(project.id, user.id, input.connection_id);
       if (existing.connector !== input.connector) throw new ToolFailure(`Connection ${input.connection_id} belongs to ${existing.connector}.`);
     }
-    const session = await this.service.createSession(project, { external_user_id: user.id, connector: input.connector }, input.connection_id);
+    const session = await this.service.createSession(project, { external_user_id: user.id, connector: input.connector, agent_name: user.client_name }, input.connection_id);
     const title = connectorSpec(input.connector).label;
-    return { connect_url: session.connect_url, expires_at: session.expires_at,
-      next_step: `Show this link to the user and ask them to open it in a browser to connect ${title}: ${session.connect_url}\nThe link expires in 15 minutes. After they say they are done, call list_connectors to confirm the connection.` };
+    return { session_id: session.id, connect_url: session.connect_url, expires_at: session.expires_at,
+      next_step: `Show this link to the user and ask them to open it in a browser to connect ${title}: ${session.connect_url}\nThe link expires in 15 minutes. Then call wait_for_connection with session_id "${session.id}"; it returns once they have authorized, and you continue with their request.` };
+  }
+  /** Long-poll a connect session so the agent continues as soon as the user has authorized. */
+  private async wait(user: OAuthUser, project: Project, sessionId: string) {
+    const deadline = Date.now() + waitSeconds * 1000;
+    for (;;) {
+      const { rows } = await this.service.pool.query('SELECT id,connector,status,connection_id,error_code,expires_at FROM connect_sessions WHERE id=$1 AND project_id=$2 AND external_user_id=$3', [sessionId, project.id, user.id]);
+      const session = rows[0];
+      if (!session) throw new ToolFailure(`Unknown session ${sessionId}. Use the session_id returned by connect.`);
+      const title = connectorSpec(session.connector).label;
+      if (session.status === 'connected') {
+        const connection = await this.service.getConnection(project.id, user.id, session.connection_id);
+        return { status: 'connected', connection: { id: connection.id, connector: connection.connector, account: connection.identity.account_name ?? null }, next_step: `${title} is connected. Continue with the user's request.` };
+      }
+      if (session.status === 'error') return { status: 'failed', error_code: session.error_code, next_step: session.error_code === 'access_denied' ? `The user declined to connect ${title}.` : `Connecting ${title} failed (${session.error_code}). Offer a new link with connect.` };
+      if (new Date(session.expires_at).getTime() <= Date.now()) return { status: 'expired', next_step: 'The link expired. Call connect for a new link if the user still wants to connect.' };
+      if (Date.now() >= deadline) return { status: 'pending', next_step: `The user has not finished authorizing ${title} yet. Call wait_for_connection again, or stop if they said they do not want to connect.` };
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
   }
   /** Tools of the user's connected services, from the catalog cache or discovered with their credential. */
   private async catalog(user: OAuthUser, project: Project, connector?: ConnectorName) {

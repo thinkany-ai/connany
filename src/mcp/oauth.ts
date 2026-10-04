@@ -22,7 +22,7 @@ export class OAuthError extends Error {
   constructor(public error: string, public description: string, public status = 400) { super(description); }
 }
 export interface AuthorizeRequest { client_id: string; redirect_uri: string; response_type: string; code_challenge: string; code_challenge_method: string; state?: string; scope?: string; resource?: string }
-export interface OAuthUser { id: string; email: string; role: string; workspace_id: string }
+export interface OAuthUser { id: string; email: string; role: string; workspace_id: string; client_name: string }
 
 const authorizeRequest = z.object({
   client_id: z.string().min(1).max(200), redirect_uri: z.string().min(1).max(2048),
@@ -138,12 +138,12 @@ export class OAuthServer {
   }
   async verify(token: string): Promise<OAuthUser | null> {
     if (!token.startsWith('cny_at_') || token.length > 100) return null;
-    const { rows } = await this.pool.query(`SELECT g.id AS grant_id,g.last_used_at,u.id,u.email,u.role FROM oauth_grants g JOIN admin_users u ON u.id=g.user_id
+    const { rows } = await this.pool.query(`SELECT g.id AS grant_id,g.last_used_at,u.id,u.email,u.role,c.client_name FROM oauth_grants g JOIN admin_users u ON u.id=g.user_id JOIN oauth_clients c ON c.id=g.client_id
       WHERE g.access_hash=$1 AND g.access_expires_at>now() AND g.revoked_at IS NULL`, [hash(token)]);
     const row = rows[0];
     if (!row) return null;
     if (!row.last_used_at || Date.now() - row.last_used_at.getTime() > 60000) await this.pool.query('UPDATE oauth_grants SET last_used_at=now() WHERE id=$1', [row.grant_id]);
-    return { id: row.id, email: row.email, role: row.role, workspace_id: await ensureWorkspace(this.pool, row) };
+    return { id: row.id, email: row.email, role: row.role, client_name: row.client_name, workspace_id: await ensureWorkspace(this.pool, row) };
   }
   /** Clients the user authorized whose tokens can still be used or refreshed. */
   async grants(userId: string) {

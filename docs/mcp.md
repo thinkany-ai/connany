@@ -43,7 +43,7 @@ Skill 告诉 agent 什么时候该用 Connany、如何把连接链接交给用�
 用户提出需求后，agent 的典型流程：
 
 1. `list_connectors`：发现 PostHog 还没连接。
-2. `connect`（`connector: "posthog"`）：返回连接链接，agent 把链接发给用户，用户在浏览器中授权 PostHog 后回到对话说「好了」。
+2. `connect`（`connector: "posthog"`）：返回连接链接，agent 把链接发给用户，并调用 `wait_for_connection` 等待。用户在浏览器中授权 PostHog 后，agent 立即继续，用户不需要回到对话确认；授权成功页会提示回到发起连接的客户端（如 Codex）。
 3. `search_tools`（`query: "trends", connector: "posthog"`）→ `describe_tool` 查看参数。
 4. `call_read_tool` 调用只读工具，根据结果回答。
 
@@ -51,12 +51,13 @@ Skill 告诉 agent 什么时候该用 Connany、如何把连接链接交给用�
 
 ## MCP 工具
 
-Connany 不把上游的工具逐个暴露给客户端（PostHog 一家就有约 750 个工具、约 5 MB 定义，会占满 agent 的上下文），而是提供 6 个固定工具：
+Connany 不把上游的工具逐个暴露给客户端（PostHog 一家就有约 750 个工具、约 5 MB 定义，会占满 agent 的上下文），而是提供 7 个固定工具：
 
 | 工具 | 说明 | 只读 |
 | --- | --- | --- |
 | `list_connectors` | 已连接的账号（含 `id`、状态）和可连接的服务 | 是 |
 | `connect` | 生成连接链接（15 分钟内有效，连接成功后失效）；传 `connection_id` 则重新授权已有连接 | 否 |
+| `wait_for_connection` | 用户打开链接后等待授权完成（每次最多约 45 秒，未完成返回 `pending` 可再次调用），完成后返回新连接 | 是 |
 | `search_tools` | 按关键词搜索已连接服务的工具，返回名称、是否只读和简介 | 是 |
 | `describe_tool` | 某个工具的完整说明和 `input_schema` | 是 |
 | `call_read_tool` | 调用只读工具（上游标记 `readOnlyHint`） | 是 |

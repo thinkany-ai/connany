@@ -165,7 +165,7 @@ test('a member connects an account from the agent and calls tools; writes need c
   const notification = await app.request(`${base}/mcp`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) });
   assert.equal(notification.status, 202);
   const listed = (await mcp(token, 'tools/list')).body.result.tools;
-  assert.deepEqual(listed.map((t: any) => t.name), ['list_connectors', 'connect', 'search_tools', 'describe_tool', 'call_read_tool', 'call_write_tool']);
+  assert.deepEqual(listed.map((t: any) => t.name), ['list_connectors', 'connect', 'wait_for_connection', 'search_tools', 'describe_tool', 'call_read_tool', 'call_write_tool']);
   assert.equal(listed.find((t: any) => t.name === 'call_write_tool').annotations.destructiveHint, true);
   assert.equal((await mcp(token, 'tools/call', { name: 'nope' })).body.error.code, -32602);
 
@@ -181,8 +181,15 @@ test('a member connects an account from the agent and calls tools; writes need c
   // The user opens the link and authorizes Notion in the browser.
   const started = await app.request(link.json.connect_url);
   const state = new URL(started.headers.get('location')!).searchParams.get('state')!;
+  // The agent waits while the user authorizes; the result page sends them back to the client by name.
+  const waiting = tool(token, 'wait_for_connection', { session_id: link.json.session_id });
+  await new Promise(resolve => setTimeout(resolve, 300));
   const callback = await app.request(`${base}/oauth/notion/callback?state=${state}&code=ok`, { headers: { Cookie: started.headers.get('set-cookie')!.split(';')[0] } });
   assert.equal(callback.status, 200);
+  assert((await callback.text()).includes('回到 Claude Code 继续对话'));
+  const waited = await waiting;
+  assert.equal(waited.json.status, 'connected'); assert.equal(waited.json.connection.connector, 'notion');
+  assert((await tool(token, 'wait_for_connection', { session_id: 'cs_unknown' })).isError);
   const connected = await tool(token, 'list_connectors');
   assert.equal(connected.json.connections.length, 1); assert.equal(connected.json.available_connectors[0].connected, true);
   const project = (await pool.query("SELECT p.kind,p.workspace_id,c.external_user_id FROM connections c JOIN projects p ON p.id=c.project_id")).rows[0];

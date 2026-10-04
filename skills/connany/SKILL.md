@@ -9,7 +9,7 @@ Connany connects you to the user's accounts in third-party services through one 
 
 ## Setup check
 
-If the `connany` MCP tools (`list_connectors`, `connect`, `search_tools`, `describe_tool`, `call_read_tool`, `call_write_tool`) are not available, tell the user how to add the server and stop:
+If the `connany` MCP tools (`list_connectors`, `connect`, `wait_for_connection`, `search_tools`, `describe_tool`, `call_read_tool`, `call_write_tool`) are not available, tell the user how to add the server and stop:
 
 - Claude Code: `claude mcp add --transport http connany {{CONNANY_MCP_URL}}`, then run `/mcp` and sign in to connany.
 - Codex: `codex mcp add connany --url {{CONNANY_MCP_URL}}`, then `codex mcp login connany`.
@@ -17,7 +17,7 @@ If the `connany` MCP tools (`list_connectors`, `connect`, `search_tools`, `descr
 ## Workflow
 
 1. **Find the account.** Call `list_connectors`. It returns the connected accounts (`connections`, each with an `id` and `status`) and the services that can be connected (`available_connectors`).
-2. **Connect if needed.** If the service the user needs is not connected, call `connect` with its `connector` name. Show the returned `connect_url` to the user as a clickable link, say which service it is for, and ask them to tell you when they have finished. Do not continue until they confirm, then call `list_connectors` again to check.
+2. **Connect if needed.** If the service the user needs is not connected, call `connect` with its `connector` name. In your reply, show the returned `connect_url` as a clickable link and say which service it is for. Then immediately call `wait_for_connection` with the returned `session_id`: it returns as soon as the user has authorized in the browser, so continue with their original request without asking them to confirm. If it returns `pending`, call it again; if `failed` or `expired`, tell the user and offer a new link.
    - If a connection's status is `reauth_required`, or a call fails with `reauth_required`, call `connect` with that `connection_id` to reconnect it.
    - If the service is not in `available_connectors`, tell the user this Connany server does not offer it.
 3. **Find the tool.** Call `search_tools` with a few English keywords and the `connector`, e.g. `{"query": "issues assigned", "connector": "linear"}`. Try other keywords if nothing fits.

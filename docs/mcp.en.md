@@ -43,7 +43,7 @@ The skill tells the agent when to use Connany, how to hand the user a connection
 A typical flow after the user asks something:
 
 1. `list_connectors`: PostHog is not connected yet.
-2. `connect` (`connector: "posthog"`): returns a link. The agent shows it, the user authorizes PostHog in the browser and says they are done.
+2. `connect` (`connector: "posthog"`): returns a link. The agent shows it and calls `wait_for_connection`. As soon as the user authorizes PostHog in the browser the agent continues; the user does not need to come back and confirm, and the success page tells them to return to the client that asked (e.g. Codex).
 3. `search_tools` (`query: "trends", connector: "posthog"`), then `describe_tool` for the parameters.
 4. `call_read_tool` runs the read-only tool and the agent answers from the result.
 
@@ -51,12 +51,13 @@ Later questions about the same service need no new authorization. Connections ap
 
 ## MCP tools
 
-Connany does not list every upstream tool to the client (PostHog alone has about 750 tools and 5 MB of definitions, which would fill the agent's context). It offers six fixed tools:
+Connany does not list every upstream tool to the client (PostHog alone has about 750 tools and 5 MB of definitions, which would fill the agent's context). It offers seven fixed tools:
 
 | Tool | Purpose | Read-only |
 | --- | --- | --- |
 | `list_connectors` | Connected accounts (with `id` and status) and services that can be connected | Yes |
 | `connect` | A connection link (valid for 15 minutes, until the account is connected); with `connection_id` it reauthorizes an existing connection | No |
+| `wait_for_connection` | Wait while the user authorizes in the browser (up to about 45 seconds per call; `pending` means call again) and return the new connection | Yes |
 | `search_tools` | Keyword search over the tools of connected services: name, read-only flag and summary | Yes |
 | `describe_tool` | Full description and `input_schema` of one tool | Yes |
 | `call_read_tool` | Call a read-only tool (upstream `readOnlyHint`) | Yes |

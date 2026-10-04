@@ -97,7 +97,7 @@ export class Service {
     catch (error) { if (!(error instanceof AppError)) throw error; }
     return this.getConnection(c.project_id,c.external_user_id,c.id);
   }
-  async createSession(project: Project, input: { external_user_id: string; connector: ConnectorName; return_url?: string }, reconnectId?: string) {
+  async createSession(project: Project, input: { external_user_id: string; connector: ConnectorName; return_url?: string; agent_name?: string }, reconnectId?: string) {
     const active = await this.connectorStore.in(await this.connectorWorkspace(project, input.connector)).active(input.connector);
     if (reconnectId && connectorSpec(input.connector).auth === 'mcp') {
       const old = await this.getConnection(project.id,input.external_user_id,reconnectId);
@@ -106,7 +106,7 @@ export class Service {
     const appId = reconnectId ? (await this.getConnection(project.id, input.external_user_id, reconnectId)).connector_app_id : active.appId;
     const sessionId = id('cs'); const token = randomToken();
     const expiresAt = new Date(Date.now() + 15 * 60 * 1000);
-    await this.pool.query(`INSERT INTO connect_sessions(id,project_id,external_user_id,connector,return_url,link_hash,expires_at,reconnect_id,connector_app_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`, [sessionId, project.id, input.external_user_id, input.connector, input.return_url || null, hash(token), expiresAt, reconnectId || null, appId]);
+    await this.pool.query(`INSERT INTO connect_sessions(id,project_id,external_user_id,connector,return_url,link_hash,expires_at,reconnect_id,connector_app_id,agent_name) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, [sessionId, project.id, input.external_user_id, input.connector, input.return_url || null, hash(token), expiresAt, reconnectId || null, appId, input.agent_name?.slice(0, 100) || null]);
     return { id: sessionId, status: 'pending', connector: input.connector, connect_url: `${this.runtime.config.publicBaseUrl}/connect/${token}`, expires_at: expiresAt };
   }
   async getLink(token: string) {

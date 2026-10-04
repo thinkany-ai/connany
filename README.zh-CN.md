@@ -17,7 +17,7 @@ Connany 是面向 Agent 产品的开源多租户连接器服务。统一管理�
 - 项目隔离：每个 API Key 属于一个项目，用户数据按 `project_id + external_user_id` 归属。
 - 连接管理：多账号和工作区、查询、主动检查、重连、断开及上游撤销重试。
 - 工具列出与调用：通过 `GET /v1/connections/{id}/tools` 列出用户连接可用的官方 MCP 工具（连接前可用 `GET /v1/tools` 浏览连接器的工具目录）、参数 schema 和读写标记，通过 `POST /v1/connections/{id}/tools/{name}/call` 调用；SDK 可仅向模型暴露 `list_tools` / `call_tool` 两个工具。
-- MCP Server 与 Skill：Connany 本身是支持 OAuth 2.1 登录（动态客户端注册、PKCE）的远程 MCP Server。用户在 Claude Code、Codex、Cursor 中添加一次，即可在对话中连接账号，并通过 6 个固定工具搜索和调用工具；读写分为两个工具，客户端可以对每次修改单独确认。可下载的 Skill 告诉 agent 完整用法。
+- MCP Server 与 Skill：Connany 本身是支持 OAuth 2.1 登录（动态客户端注册、PKCE）的远程 MCP Server。用户在 Claude Code、Codex、Cursor 中添加一次，即可在对话中连接账号，并通过几个固定工具搜索和调用工具；读写分为两个工具，客户端可以对每次修改单独确认。可下载的 Skill 告诉 agent 完整用法。
 - 事件流：一个项目级接口（`GET /v1/events`）汇总所有用户的连接、需要重新授权、断开和工具调用事件。
 - 凭证保护：AES-256-GCM 加密连接器与用户凭证、API Key 仅保存哈希、事务锁协调刷新和调用。
 

@@ -7,10 +7,13 @@ export function page(title: string, content: string) { return `<!doctype html><h
 export function toolSyncPage(connector: string, error: string | null, toolCount: number) {
   return page(error ? '同步未完成' : '工具目录已同步', `<div class="eyebrow">${escape(names[connector])}</div><h1>${error ? '同步未完成' : '工具目录已同步'}</h1><div class="panel"><p>${error ? '没有更新工具目录，请回到管理后台重试。' : `已同步 ${toolCount} 个工具。本次授权仅用于读取工具目录，凭证已撤销，没有创建用户连接。`}</p>${error ? `<small>错误代码：<code>${escape(error)}</code></small>` : ''}<a class="button" href="/admin/connectors">返回管理后台 →</a></div>`);
 }
+/** `agent_name`: the app that created the session (e.g. Codex through MCP); users go back there. */
 export function resultPage(session: any, error: string | null, access: { label: string; url: string } | null) {
   let returnUrl: string | undefined;
   if (session.return_url) { const url = new URL(session.return_url); url.searchParams.set('connany_session_id', session.id); returnUrl = url.toString(); }
-  return page(error ? '连接未完成' : '已连接', `<div class="eyebrow">${escape(names[session.connector])}</div><h1>${error ? '连接未完成' : '账号已连接'}</h1><div class="panel"><p>${error ? '请返回 agent 重新发起连接。若你取消了授权，可以在准备好后再试。' : access ? `账号已连接，还需要授权可访问的资源（${escape(access.label)}）。你可以现在添加，也可以返回 agent 后再添加。` : '你可以回到 agent，使用已授权的连接。'}</p>${error ? `<small>错误代码：<code>${escape(error)}</code></small>` : ''}${access ? `<a class="secondary" href="${escape(access.url)}" target="_blank" rel="noopener noreferrer">${escape(access.label)} ↗</a>` : ''}${returnUrl ? `<a class="button" href="${escape(returnUrl)}">返回 agent →</a>` : '<p>现在可以关闭此页面，返回 agent。</p>'}</div>`);
+  const agent = escape(session.agent_name || 'agent');
+  const done = session.agent_name ? `回到 ${agent} 继续对话即可，${agent} 会接着完成你的请求。` : '你可以回到 agent，使用已授权的连接。';
+  return page(error ? '连接未完成' : '已连接', `<div class="eyebrow">${escape(names[session.connector])}</div><h1>${error ? '连接未完成' : '账号已连接'}</h1><div class="panel"><p>${error ? `请回到 ${agent} 重新发起连接。若你取消了授权，可以在准备好后再试。` : access ? `账号已连接，还需要授权可访问的资源（${escape(access.label)}）。你可以现在添加，也可以返回 ${agent} 后再添加。` : done}</p>${error ? `<small>错误代码：<code>${escape(error)}</code></small>` : ''}${access ? `<a class="secondary" href="${escape(access.url)}" target="_blank" rel="noopener noreferrer">${escape(access.label)} ↗</a>` : ''}${returnUrl ? `<a class="button" href="${escape(returnUrl)}">返回 ${agent} →</a>` : `<p>现在可以关闭此页面。</p>`}</div>`);
 }
 export function errorPage(message: string) { return page('无法继续连接', `<h1>无法继续连接</h1><div class="panel"><p>${escape(message)}</p><p>返回 agent，重新生成一个连接链接。</p></div>`); }
 
