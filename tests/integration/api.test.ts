@@ -188,6 +188,23 @@ test('disconnect blocks actions even when connector revocation fails and can be 
   assert.equal(body.revocation_status,'succeeded');
   assert.equal((await service.getConnection('a','disconnect-user',flow.id)).credential_ciphertext,null);
 });
+test('a connection link survives link previews: reopening restarts authorization until it completes', async () => {
+  const s = await (await api('/v1/connectors/notion/sessions','POST',{external_user_id:'preview-user'})).json() as any;
+  // A chat app fetches the link first (unfurl / favicon), then the user opens it.
+  const preview = await app.request(s.connect_url);
+  assert.equal(preview.status, 302);
+  const opened = await app.request(s.connect_url);
+  assert.equal(opened.status, 302);
+  const stale = new URL(preview.headers.get('location')!).searchParams.get('state');
+  const state = new URL(opened.headers.get('location')!).searchParams.get('state');
+  assert.notEqual(stale, state);
+  // The preview's authorization no longer completes; the user's does.
+  assert.equal((await app.request(`http://localhost:3000/oauth/notion/callback?state=${stale}&code=ok`, { headers: { Cookie: preview.headers.get('set-cookie')!.split(';')[0] } })).status, 400);
+  const done = await app.request(`http://localhost:3000/oauth/notion/callback?state=${state}&code=ok`, { headers: { Cookie: opened.headers.get('set-cookie')!.split(';')[0] } });
+  assert.equal(done.status, 200);
+  assert.equal(((await (await api(`/v1/connectors/notion/sessions/${s.id}?external_user_id=preview-user`)).json()) as any).status, 'connected');
+  assert.equal((await app.request(s.connect_url)).status, 410);
+});
 test('expired sessions, action schemas and connector mismatch are rejected', async () => {
   const s = await (await api('/v1/connectors/notion/sessions','POST',{external_user_id:'expired'})).json() as any;
   await pool.query("UPDATE connect_sessions SET expires_at=now()-interval '1 minute' WHERE id=$1",[s.id]);

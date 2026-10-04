@@ -131,7 +131,7 @@ export class McpServer {
     const session = await this.service.createSession(project, { external_user_id: user.id, connector: input.connector }, input.connection_id);
     const title = connectorSpec(input.connector).label;
     return { connect_url: session.connect_url, expires_at: session.expires_at,
-      next_step: `Show this link to the user and ask them to open it in a browser to connect ${title}: ${session.connect_url}\nThe link works once and expires in 15 minutes. After they say they are done, call list_connectors to confirm the connection.` };
+      next_step: `Show this link to the user and ask them to open it in a browser to connect ${title}: ${session.connect_url}\nThe link expires in 15 minutes. After they say they are done, call list_connectors to confirm the connection.` };
   }
   /** Tools of the user's connected services, from the catalog cache or discovered with their credential. */
   private async catalog(user: OAuthUser, project: Project, connector?: ConnectorName) {

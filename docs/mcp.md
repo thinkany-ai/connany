@@ -56,7 +56,7 @@ Connany 不把上游的工具逐个暴露给客户端（PostHog 一家就有约 
 | 工具 | 说明 | 只读 |
 | --- | --- | --- |
 | `list_connectors` | 已连接的账号（含 `id`、状态）和可连接的服务 | 是 |
-| `connect` | 生成连接链接（15 分钟内有效、只能使用一次）；传 `connection_id` 则重新授权已有连接 | 否 |
+| `connect` | 生成连接链接（15 分钟内有效，连接成功后失效）；传 `connection_id` 则重新授权已有连接 | 否 |
 | `search_tools` | 按关键词搜索已连接服务的工具，返回名称、是否只读和简介 | 是 |
 | `describe_tool` | 某个工具的完整说明和 `input_schema` | 是 |
 | `call_read_tool` | 调用只读工具（上游标记 `readOnlyHint`） | 是 |

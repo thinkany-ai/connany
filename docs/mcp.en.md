@@ -56,7 +56,7 @@ Connany does not list every upstream tool to the client (PostHog alone has about
 | Tool | Purpose | Read-only |
 | --- | --- | --- |
 | `list_connectors` | Connected accounts (with `id` and status) and services that can be connected | Yes |
-| `connect` | A connection link (single use, valid for 15 minutes); with `connection_id` it reauthorizes an existing connection | No |
+| `connect` | A connection link (valid for 15 minutes, until the account is connected); with `connection_id` it reauthorizes an existing connection | No |
 | `search_tools` | Keyword search over the tools of connected services: name, read-only flag and summary | Yes |
 | `describe_tool` | Full description and `input_schema` of one tool | Yes |
 | `call_read_tool` | Call a read-only tool (upstream `readOnlyHint`) | Yes |

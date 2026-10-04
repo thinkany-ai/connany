@@ -112,16 +112,21 @@ export class Service {
   async getLink(token: string) {
     const { rows } = await this.pool.query(`SELECT s.*, p.name AS project_name, p.workspace_id AS project_workspace_id, p.kind AS project_kind FROM connect_sessions s JOIN projects p ON p.id=s.project_id WHERE s.link_hash=$1 AND p.enabled=true`, [hash(token)]);
     const s = rows[0];
-    if (!s || new Date(s.expires_at).getTime() <= Date.now() || s.status !== 'pending') throw new AppError('session_unavailable', 'This connection link has expired or was already used. Request a new link from your agent.', 410);
+    if (!s || new Date(s.expires_at).getTime() <= Date.now() || !['pending','authorizing'].includes(s.status)) throw new AppError('session_unavailable', 'This connection link has expired or was already used. Request a new link from your agent.', 410);
     return s;
   }
+  /**
+   * Start (or restart) authorization from a connection link. Chat apps and link previews often
+   * fetch a link before the user clicks it, so opening it again until authorization completes
+   * issues a fresh state and browser binding; whatever an earlier open started stops working.
+   */
   async begin(token: string) {
     const s = await this.getLink(token);
     await this.connectorStore.in(await this.connectorWorkspace({ workspace_id: s.project_workspace_id, kind: s.project_kind }, s.connector)).active(s.connector);
     const runtime = await this.connectorStore.resolve(s.connector, s.connector_app_id);
     const state = randomToken(); const browser = randomToken(); const verifier = randomToken();
     const url = runtime.authorizeUrl(s.connector, state, verifier);
-    const { rowCount } = await this.pool.query(`UPDATE connect_sessions SET status='authorizing',state_hash=$1,browser_hash=$2,verifier_ciphertext=$3 WHERE id=$4 AND status='pending' AND expires_at>now()`, [hash(state), hash(browser), this.vault.seal(verifier, s.id), s.id]);
+    const { rowCount } = await this.pool.query(`UPDATE connect_sessions SET status='authorizing',state_hash=$1,browser_hash=$2,verifier_ciphertext=$3 WHERE id=$4 AND status IN ('pending','authorizing') AND expires_at>now()`, [hash(state), hash(browser), this.vault.seal(verifier, s.id), s.id]);
     if (!rowCount) throw new AppError('session_unavailable', 'This connection link was already used.', 410);
     return { session: s, browser, url };
   }
