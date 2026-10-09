@@ -17,6 +17,10 @@ const emptyConfig={...config,connectors:connectorClients()};
 const calls:{url:string;auth:string;body:string}[]=[];
 const fetcher:typeof fetch=async(url,init)=>{
   const u=String(url);calls.push({url:u,auth:new Headers(init?.headers).get('Authorization')||'',body:String(init?.body||'')});
+  if(u==='https://oauth2.googleapis.com/token')return Response.json({access_token:'google-access',refresh_token:'google-refresh',expires_in:3599,scope:'openid email https://www.googleapis.com/auth/analytics.readonly'});
+  if(u==='https://openidconnect.googleapis.com/v1/userinfo')return Response.json({sub:'1099',email:'alice@example.com'});
+  if(u==='https://oauth2.googleapis.com/revoke')return new Response(null,{status:200});
+  if(u.startsWith('https://analyticsadmin.googleapis.com/v1beta/accountSummaries'))return Response.json({accountSummaries:[{account:'accounts/1',displayName:'Acme',propertySummaries:[{property:'properties/123',displayName:'acme.com',propertyType:'PROPERTY_TYPE_ORDINARY'}]}]});
   if(u.endsWith('/login/oauth/access_token'))return Response.json({access_token:'upstream-token',refresh_token:'upstream-refresh',expires_in:3600,workspace_id:'w',workspace_name:'Work',bot_id:'bot',owner:{user:{id:'alice',name:'Alice'}}});
   if(u.endsWith('/oauth/revoke'))return Response.json({});
   if(u.endsWith('/user')) return Response.json({id:42,login:'alice'});
@@ -146,6 +150,31 @@ test('deleting a project revokes upstream grants and removes only its data',asyn
   assert.equal((await service.getConnection(kept.project.id,'u1',keptConnection)).status,'connected');
   assert.equal((await admin(`/api/projects/${doomed.project.id}/delete`,'POST',{})).status,404);
   assert((await(await admin('/activity')).text()).includes('project.deleted'));
+});
+test('Google Analytics uses an administrator OAuth client and built-in REST tools end to end',async()=>{
+  assert.equal((await admin('/api/connectors/google_analytics','POST',{client_id:'google-client',client_secret:'google-secret',enabled:true})).status,200);
+  const html=await(await admin('/connectors')).text();
+  const dialog=html.slice(html.indexOf('id="connector-google_analytics"'));
+  assert(dialog.includes('创建 Google OAuth 客户端')&&dialog.includes('/oauth/google_analytics/callback'));assert(!dialog.slice(0,dialog.indexOf('</dialog>')).includes('github_app_slug'));
+  const card=html.slice(html.indexOf('id="card-google_analytics"'));assert(card.slice(0,card.indexOf('</section>')).includes('内置'));assert(!card.slice(0,card.indexOf('</section>')).includes('tool-sync'));
+  const p=await project('Analytics');
+  const catalog=await(await api(p.api_key,'/tools?connector=google_analytics')).json() as any;assert.equal(catalog.total,5);
+  const response=await api(p.api_key,'/connectors/google_analytics/sessions','POST',{external_user_id:'analyst'});assert.equal(response.status,201);const session=await response.json() as any;
+  const start=await app.request(`${session.connect_url}/start`,{method:'POST',headers:{Origin:config.publicBaseUrl}});assert.equal(start.status,200);
+  const authorize=new URL(start.headers.get('refresh')!.slice(6));
+  assert.equal(authorize.origin,'https://accounts.google.com');assert.equal(authorize.searchParams.get('client_id'),'google-client');assert.equal(authorize.searchParams.get('access_type'),'offline');
+  const result=await app.request(`http://localhost:3000/oauth/google_analytics/callback?state=${authorize.searchParams.get('state')}&code=test`,{headers:{Cookie:start.headers.get('set-cookie')!.split(';')[0]}});assert.equal(result.status,200);
+  const completed=await(await api(p.api_key,`/connectors/google_analytics/sessions/${session.id}?external_user_id=analyst`)).json() as any;assert.equal(completed.status,'connected');
+  const token=calls.find(c=>c.url==='https://oauth2.googleapis.com/token')!;assert.equal(new URLSearchParams(token.body).get('client_secret'),'google-secret');
+  const connection=await(await api(p.api_key,`/connections/${completed.connection_id}?external_user_id=analyst`)).json() as any;assert.equal(connection.identity.account_name,'alice@example.com');
+  const tools=await(await api(p.api_key,`/connections/${completed.connection_id}/tools?external_user_id=analyst&query=realtime`)).json() as any;
+  assert.deepEqual(tools.data.map((t:any)=>t.name),['google_analytics.run_realtime_report']);
+  const call=await(await api(p.api_key,`/connections/${completed.connection_id}/tools/google_analytics.list_account_summaries/call`,'POST',{external_user_id:'analyst',input:{}})).json() as any;
+  assert.deepEqual(call.data.accounts[0].properties,[{property_id:'123',name:'acme.com',type:'PROPERTY_TYPE_ORDINARY'}]);
+  assert.equal(calls.at(-1)!.auth,'Bearer google-access');
+  assert.equal((await pool.query("SELECT 1 FROM connector_tools WHERE connector='google_analytics'")).rowCount,0);
+  const disconnected=await(await api(p.api_key,`/connections/${completed.connection_id}?external_user_id=analyst`,'DELETE')).json() as any;
+  assert.equal(disconnected.revocation_status,'succeeded');assert.equal(calls.at(-1)!.body,'token=google-refresh');
 });
 test('administrators manage console users; members use the workbench but not the System section',async()=>{
   const signIn=async(email:string,password:string)=>{

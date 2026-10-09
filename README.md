@@ -50,7 +50,7 @@ To use an existing database, set `DATABASE_URL` in `.env` and skip the Docker st
 | Collaboration | [Notion](https://www.notion.com) · [Linear](https://linear.app) · [Atlassian](https://www.atlassian.com) (Jira, Confluence) · [ClickUp](https://clickup.com) · [monday.com](https://monday.com) · [Airtable](https://airtable.com) · [Todoist](https://todoist.com) · [Intercom](https://www.intercom.com) |
 | Code & deploy | [GitHub](https://github.com) · [GitLab](https://gitlab.com) · [Vercel](https://vercel.com) · [Netlify](https://www.netlify.com) · [Cloudflare](https://www.cloudflare.com) |
 | Databases | [Supabase](https://supabase.com) · [Neon](https://neon.com) · [Prisma](https://www.prisma.io) |
-| Monitoring & analytics | [Sentry](https://sentry.io) · [PostHog](https://posthog.com) |
+| Monitoring & analytics | [Sentry](https://sentry.io) · [PostHog](https://posthog.com) · [Google Search Console](https://search.google.com/search-console) · [Google Analytics](https://analytics.google.com) |
 | Payments | [Stripe](https://stripe.com) · [PayPal](https://www.paypal.com) · [Square](https://squareup.com) |
 | Design & websites | [Canva](https://www.canva.com) · [Miro](https://miro.com) · [Webflow](https://webflow.com) · [Wix](https://www.wix.com) |
 

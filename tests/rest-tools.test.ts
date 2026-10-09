@@ -6,7 +6,7 @@ import {config} from './support.js';
 
 test('REST compatibility tools expose schemas, write flags and permissions under stable names',()=>{
  const catalog=restToolCatalog();
- assert.equal(catalog.length,18);
+ assert.equal(catalog.filter(t=>t.connector==='github').length,18);
  const create=catalog.find(t=>t.name==='github.pull_requests.create')!;
  assert.equal(create.connector,'github');assert.equal(create.read_only,false);assert(create.input_schema.properties);
  assert(create.required_permissions.includes('Pull requests: write'));

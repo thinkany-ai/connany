@@ -51,7 +51,7 @@ npm run dev   # 或：make dev
 | 协作与办公 | [Notion](https://www.notion.com) · [Linear](https://linear.app) · [Atlassian](https://www.atlassian.com)（Jira、Confluence）· [ClickUp](https://clickup.com) · [monday.com](https://monday.com) · [Airtable](https://airtable.com) · [Todoist](https://todoist.com) · [Intercom](https://www.intercom.com) |
 | 代码与部署 | [GitHub](https://github.com) · [GitLab](https://gitlab.com) · [Vercel](https://vercel.com) · [Netlify](https://www.netlify.com) · [Cloudflare](https://www.cloudflare.com) |
 | 数据库 | [Supabase](https://supabase.com) · [Neon](https://neon.com) · [Prisma](https://www.prisma.io) |
-| 监控与分析 | [Sentry](https://sentry.io) · [PostHog](https://posthog.com) |
+| 监控与分析 | [Sentry](https://sentry.io) · [PostHog](https://posthog.com) · [Google Search Console](https://search.google.com/search-console) · [Google Analytics](https://analytics.google.com) |
 | 支付 | [Stripe](https://stripe.com) · [PayPal](https://www.paypal.com) · [Square](https://squareup.com) |
 | 设计与建站 | [Canva](https://www.canva.com) · [Miro](https://miro.com) · [Webflow](https://webflow.com) · [Wix](https://www.wix.com) |
 

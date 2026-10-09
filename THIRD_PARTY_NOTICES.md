@@ -4,10 +4,10 @@ Connany source code is licensed under MIT. Third-party packages retain their own
 
 ## Connector marks
 
-All connector names and logos (Notion, GitHub, Linear, Sentry, PostHog, Atlassian, Vercel, Supabase, Neon, Netlify, GitLab, Cloudflare, Prisma, Stripe, PayPal, Square, ClickUp, monday.com, Airtable, Todoist, Miro, Canva, Intercom, Webflow and Wix) belong to their respective owners and are used to identify integrations. No affiliation or endorsement is implied. The Connany license does not grant rights to these trademarks.
+All connector names and logos (Notion, GitHub, Linear, Sentry, PostHog, Atlassian, Vercel, Supabase, Neon, Netlify, GitLab, Cloudflare, Prisma, Stripe, PayPal, Square, ClickUp, monday.com, Airtable, Todoist, Miro, Canva, Intercom, Webflow, Wix, Google Search Console and Google Analytics) belong to their respective owners and are used to identify integrations. No affiliation or endorsement is implied. The Connany license does not grant rights to these trademarks.
 
 - Notion and GitHub SVG icons in `src/connectors/catalog.ts`: sourced from [LobeHub Icons](https://github.com/lobehub/lobe-icons), under the MIT license reproduced below.
-- Other connector SVG icons: sourced from [Simple Icons](https://simpleicons.org) (CC0 1.0). monday.com and Canva are not available there and use plain monograms.
+- Other connector SVG icons: sourced from [Simple Icons](https://simpleicons.org) (CC0 1.0). monday.com and Canva are not available there and use plain monograms. The Google Search Console mark is redrawn as a monochrome vector from Google's official logo.
 - Linear SVG logomark: sourced from [Linear Brand Guidelines](https://linear.app/brand), `Linear-Brand-Assets.zip?v=3`, `logo-dark.svg`. It remains subject to Linear's brand usage terms.
 
 ## LobeHub Icons license

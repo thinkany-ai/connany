@@ -108,7 +108,8 @@ export class McpServer {
       connector_not_configured: 'This service is not available on this Connany server. Call list_connectors for the available ones.',
       rate_limited: 'Too many requests: wait a minute and retry.',
     };
-    return [`${error.code}: ${error.message}`, upstream, hints[error.code]].filter(Boolean).join('\n');
+    const message = typeof error.details?.upstream_message === 'string' ? `Upstream said: ${error.details.upstream_message}` : undefined;
+    return [`${error.code}: ${error.message}`, upstream, message, hints[error.code]].filter(Boolean).join('\n');
   }
   /** Connectors offered to the user: their own enabled ones plus the platform's. */
   private async available(user: OAuthUser) {
