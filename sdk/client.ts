@@ -2,19 +2,22 @@
 /** Groups connectors for display: collaboration, development, data, analytics, payments, design. */
 export type ConnectorCategory = 'collaboration' | 'development' | 'data' | 'analytics' | 'payments' | 'design';
 export type ConnectorName = 'notion' | 'github' | 'linear' | 'sentry' | 'posthog' | 'atlassian' | 'vercel' | 'supabase' | 'neon' | 'netlify' | 'gitlab' | 'cloudflare' | 'prisma' | 'stripe' | 'paypal' | 'square' | 'clickup' | 'monday' | 'airtable' | 'todoist' | 'miro' | 'canva' | 'intercom' | 'webflow' | 'wix';
+/** A remote MCP server one user added by URL; used as a connector by `name`. */
+export type CustomConnectorName = `mcp_${string}`;
+export interface CustomConnector { name: CustomConnectorName; title: string; url: string; website: string; avatar_url: string; created_at: string }
 export interface ConnectSession {
-  id: string; connector: ConnectorName; status: 'pending' | 'authorizing' | 'processing' | 'connected' | 'error' | 'expired';
+  id: string; connector: ConnectorName | CustomConnectorName; status: 'pending' | 'authorizing' | 'processing' | 'connected' | 'error' | 'expired';
   expires_at: string; connect_url?: string; connection_id?: string | null; error_code?: string | null;
 }
 export interface Connection {
-  id: string; external_user_id: string; connector: ConnectorName; status: 'connected' | 'reauth_required' | 'revoked';
+  id: string; external_user_id: string; connector: ConnectorName | CustomConnectorName; status: 'connected' | 'reauth_required' | 'revoked';
   identity: { account_id: string; account_name: string; workspace_id?: string; workspace_name?: string; [key: string]: unknown };
   /** True when the user still needs to grant resource access (see listAccess). */
   needs_access: boolean;
   expires_at: string | null; revocation_status: string; created_at: string; updated_at: string;
 }
 export interface AccessGrant { id: string; type: string; name: string; selection: 'all' | 'selected'; suspended: boolean; manage_url: string | null }
-export interface ToolDefinition { name: string; connector: ConnectorName; description: string; read_only: boolean; required_permissions: string[]; input_schema: Record<string, unknown> }
+export interface ToolDefinition { name: string; connector: ConnectorName | CustomConnectorName; description: string; read_only: boolean; required_permissions: string[]; input_schema: Record<string, unknown> }
 export interface ConnectionListOptions { after?: string; limit?: number; connector?: ConnectorName; status?: Connection['status'] }
 export class ConnanyError extends Error {
   constructor(public status: number, public code: string, message: string, public requestId?: string, public details?: Record<string, unknown>) { super(message); this.name = 'ConnanyError'; }
@@ -52,16 +55,20 @@ export class Connany {
     for (const key of ['connector','query','limit','offset','read_only'] as const) if (options[key] !== undefined) query.set(key, String(options[key]));
     return this.request<{data:ToolDefinition[];total:number;next_offset:number|null}>(`/v1/tools?${query}`);
   }
-  createSession(connector: ConnectorName, input: { external_user_id: string; return_url?: string }) {
+  createSession(connector: ConnectorName | CustomConnectorName, input: { external_user_id: string; return_url?: string }) {
     return this.request<ConnectSession & { connect_url: string }>(`/v1/connectors/${encodeURIComponent(connector)}/sessions`, 'POST', input);
   }
-  getSession(connector: ConnectorName, id: string, externalUserId: string) { return this.request<ConnectSession>(`/v1/connectors/${encodeURIComponent(connector)}/sessions/${encodeURIComponent(id)}?${new URLSearchParams({ external_user_id: externalUserId })}`); }
+  getSession(connector: ConnectorName | CustomConnectorName, id: string, externalUserId: string) { return this.request<ConnectSession>(`/v1/connectors/${encodeURIComponent(connector)}/sessions/${encodeURIComponent(id)}?${new URLSearchParams({ external_user_id: externalUserId })}`); }
   listConnections(externalUserId: string, options: string | ConnectionListOptions = {}) {
     const filters = typeof options === 'string' ? { after: options } : options;
     const query = new URLSearchParams({ external_user_id: externalUserId });
     for (const key of ['after','limit','connector','status'] as const) if (filters[key] !== undefined) query.set(key, String(filters[key]));
     return this.request<{ data: Connection[]; next_cursor: string | null }>(`/v1/connections?${query}`);
   }
+  /** Add a remote MCP server for one user (OAuth servers with dynamic client registration). */
+  addCustomConnector(externalUserId: string, url: string) { return this.request<CustomConnector>('/v1/custom-connectors', 'POST', { external_user_id: externalUserId, url }); }
+  listCustomConnectors(externalUserId: string) { return this.request<{ data: CustomConnector[] }>(`/v1/custom-connectors?${new URLSearchParams({ external_user_id: externalUserId })}`); }
+  removeCustomConnector(name: CustomConnectorName, externalUserId: string) { return this.request<{ name: string; removed: true; revoked: number }>(`/v1/custom-connectors/${encodeURIComponent(name)}?${new URLSearchParams({ external_user_id: externalUserId })}`, 'DELETE'); }
   getConnection(id: string, externalUserId: string) { return this.request<Connection>(`/v1/connections/${encodeURIComponent(id)}?${new URLSearchParams({ external_user_id: externalUserId })}`); }
   checkConnection(id: string, externalUserId: string) {
     return this.request<{ connection_id: string; connector: ConnectorName; checked_at: string; tool_count: number; request_id: string }>(`/v1/connections/${encodeURIComponent(id)}/check`, 'POST', { external_user_id: externalUserId });

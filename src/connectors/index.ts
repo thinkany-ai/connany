@@ -3,7 +3,8 @@ import { genericIdentity } from './mcp-identity.js';
 import { z } from 'zod';
 import { githubRestTools } from './github-rest.js';
 import type { Config } from '../config.js';
-import { connector as definition, connectorNames, type ConnectorName } from './catalog.js';
+import { connector as definition, connectorNames, isCustomConnector, type AnyConnector } from './catalog.js';
+import { guardFetch, systemLookup, type HostLookup } from './remote-mcp.js';
 import { challenge } from '../crypto.js';
 import { AppError, UpstreamError } from '../errors.js';
 
@@ -16,23 +17,31 @@ export const restTools = {
   'github.installations.list': { connector: 'github', description: 'List installations of this GitHub App accessible to the user.', schema: z.object({ page: z.number().int().min(1).max(10000).default(1), limit: pagination.limit }).strict() },
   'github.repositories.list': { connector: 'github', description: 'List repositories accessible to both the user and a GitHub App installation.', schema: z.object({ installation_id: z.number().int().positive(), page: z.number().int().min(1).max(10000).default(1), limit: pagination.limit }).strict() },
 } as const;
-export type ToolName = keyof typeof restTools | `${ConnectorName}.${string}`;
-/** Dynamic MCP tool names: `<connector>.<upstream tool>`. */
-export const toolNamePattern = new RegExp(`^(${connectorNames.join('|')})\\.[a-zA-Z0-9_-]{1,128}$`);
+export type ToolName = keyof typeof restTools | `${AnyConnector}.${string}`;
+/** Dynamic MCP tool names: `<connector>.<upstream tool>`, built-in or custom (`mcp_…`). */
+export const toolNamePattern = new RegExp(`^(${connectorNames.join('|')}|mcp_[a-z0-9]{10})\\.[a-zA-Z0-9_-]{1,128}$`);
 export function restToolCatalog() { return Object.entries(restTools).map(([name, a]) => ({ name, connector: a.connector, description: a.description, read_only: 'read_only' in a ? a.read_only : true, required_permissions: 'required_permissions' in a ? a.required_permissions : ['Metadata: read'], input_schema: z.toJSONSchema(a.schema) })); }
 
 export class ConnectorRuntime {
-  constructor(public config: Config, private fetcher: Fetcher = fetch) {}
-  mcp(connector: ConnectorName) { return new HostedMcp(this.fetcher,connector); }
-  withConfig(config: Config) { return new ConnectorRuntime(config, this.fetcher); }
-  enabled(connector: ConnectorName) { return !!this.config.connectors[connector].clientId; }
-  callback(connector: ConnectorName) { return `${this.config.publicBaseUrl}/oauth/${connector}/callback`; }
+  constructor(public config: Config, private fetcher: Fetcher = fetch, private lookup: HostLookup = systemLookup) {}
+  /** Custom servers are unvetted: their traffic may only reach public addresses. */
+  mcp(connector: AnyConnector) { return new HostedMcp(isCustomConnector(connector) ? guardFetch(this.fetcher, this.lookup) : this.fetcher,connector); }
+  /** The base fetcher and host lookup, for discovering a custom server. */
+  network() { return { fetcher: this.fetcher, lookup: this.lookup }; }
+  withConfig(config: Config) { return new ConnectorRuntime(config, this.fetcher, this.lookup); }
+  enabled(connector: AnyConnector) { return !!this.config.connectors[connector]?.clientId; }
+  private client(connector: AnyConnector) {
+    const app = this.config.connectors[connector];
+    if (!app) throw new AppError('connector_not_configured', 'This connector is not configured.', 503);
+    return app;
+  }
+  callback(connector: AnyConnector) { return `${this.config.publicBaseUrl}/oauth/${connector}/callback`; }
   installUrl() { return `https://github.com/apps/${this.config.githubAppSlug}/installations/new`; }
-  authorizeUrl(connector: ConnectorName, state: string, verifier: string) {
+  authorizeUrl(connector: AnyConnector, state: string, verifier: string) {
     if (!this.enabled(connector)) throw new AppError('connector_not_configured', 'This connector is not configured.', 503);
     const spec = definition(connector);
     const url = new URL(spec.auth === 'mcp' ? this.mcp(connector).oauthUrl('authorize')! : 'https://github.com/login/oauth/authorize');
-    url.search = new URLSearchParams({ client_id: this.config.connectors[connector].clientId, redirect_uri: this.callback(connector), response_type: 'code', state }).toString();
+    url.search = new URLSearchParams({ client_id: this.client(connector).clientId, redirect_uri: this.callback(connector), response_type: 'code', state }).toString();
     { url.searchParams.set('code_challenge', challenge(verifier)); url.searchParams.set('code_challenge_method', 'S256'); }
     if (spec.auth === 'mcp' && spec.mcp.scope) url.searchParams.set('scope', spec.mcp.scope);
     for (const [key, value] of Object.entries(spec.mcp.authorizeParams || {})) if (spec.auth === 'mcp') url.searchParams.set(key, value);
@@ -42,8 +51,8 @@ export class ConnectorRuntime {
     if (connector === 'github') url.searchParams.set('prompt', 'select_account');
     return url.toString();
   }
-  private mcpClient(connector: ConnectorName) { const app = this.config.connectors[connector]; return { clientId: app.clientId, clientSecret: app.clientSecret, authMethod: app.authMethod || 'none' } as const; }
-  private basic(connector: ConnectorName) { const p = this.config.connectors[connector]; return `Basic ${Buffer.from(`${p.clientId}:${p.clientSecret}`).toString('base64')}`; }
+  private mcpClient(connector: AnyConnector) { const app = this.client(connector); return { clientId: app.clientId, clientSecret: app.clientSecret, authMethod: app.authMethod || 'none' } as const; }
+  private basic(connector: AnyConnector) { const p = this.client(connector); return `Basic ${Buffer.from(`${p.clientId}:${p.clientSecret}`).toString('base64')}`; }
   private async request(url: string, init: RequestInit, tokenRequest = false): Promise<any> {
     let response: Response;
     try { response = await this.fetcher(url, { ...init, redirect: 'error', signal: AbortSignal.timeout(15000) }); }
@@ -57,8 +66,8 @@ export class ConnectorRuntime {
     }
     return body;
   }
-  private async token(connector: ConnectorName, fields: Record<string, string>, old?: Credentials) {
-    const app = this.config.connectors[connector];
+  private async token(connector: AnyConnector, fields: Record<string, string>, old?: Credentials) {
+    const app = this.client(connector);
     const urls = { github: 'https://github.com/login/oauth/access_token' };
     const raw = definition(connector).auth === 'mcp' ? await this.mcp(connector).token(this.mcpClient(connector), fields) : await this.request(urls.github, { method: 'POST', headers: { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({...fields,client_id:app.clientId,client_secret:app.clientSecret}).toString() }, true);
     if (typeof raw.access_token !== 'string' || !raw.access_token) throw new UpstreamError('invalid_token_response');
@@ -68,10 +77,10 @@ export class ConnectorRuntime {
       scopes: Array.isArray(raw.scope) ? raw.scope : typeof raw.scope === 'string' ? raw.scope.split(/[ ,]+/).filter(Boolean) : old?.scopes };
     return { credential, raw };
   }
-  async exchange(connector: ConnectorName, code: string, verifier: string) {
+  async exchange(connector: AnyConnector, code: string, verifier: string) {
     return this.token(connector, { grant_type: 'authorization_code', code, redirect_uri: this.callback(connector), code_verifier: verifier });
   }
-  async refresh(connector: ConnectorName, credential: Credentials) {
+  async refresh(connector: AnyConnector, credential: Credentials) {
     if (!credential.refreshToken || (credential.refreshExpiresAt && Date.parse(credential.refreshExpiresAt) <= Date.now())) throw new UpstreamError('reauth_required', 401);
     return (await this.token(connector, { grant_type: 'refresh_token', refresh_token: credential.refreshToken }, credential)).credential;
   }
@@ -79,7 +88,7 @@ export class ConnectorRuntime {
     const bases = { github: 'https://api.github.com' };
     return this.request(bases[connector] + path, { ...init, headers: { Authorization: `Bearer ${credential.accessToken}`, Accept: 'application/json', 'Content-Type': 'application/json', ...(connector === 'github' ? { 'X-GitHub-Api-Version': this.config.githubVersion, 'User-Agent': 'Connany/0.1' } : {}) } });
   }
-  async identify(connector: ConnectorName, credential: Credentials, raw: any): Promise<Identity> {
+  async identify(connector: AnyConnector, credential: Credentials, raw: any): Promise<Identity> {
     const spec = definition(connector);
     if (spec.identify) return spec.identify(this.mcp(connector), credential, raw);
     if (spec.auth === 'mcp') return genericIdentity(this.mcp(connector), credential, raw, spec.label);
@@ -91,7 +100,7 @@ export class ConnectorRuntime {
     }
     throw new UpstreamError('invalid_upstream_identity');
   }
-  async revoke(connector: ConnectorName, credential: Credentials) {
+  async revoke(connector: AnyConnector, credential: Credentials) {
     if (definition(connector).auth === 'github_app') {
       await this.request(`https://api.github.com/applications/${encodeURIComponent(this.config.connectors.github.clientId)}/token`, { method: 'DELETE', headers: { Authorization: this.basic(connector), Accept: 'application/vnd.github+json', 'Content-Type': 'application/json', 'X-GitHub-Api-Version': this.config.githubVersion, 'User-Agent': 'Connany/0.1' }, body: JSON.stringify({ access_token: credential.accessToken }) });
     } else {
@@ -100,7 +109,7 @@ export class ConnectorRuntime {
   }
   /** `known`: the tool is in the cached catalog, so the upstream list is not fetched to check it. */
   async execute(name: ToolName, input: any, credential: Credentials, known = false): Promise<unknown> {
-    if (!Object.hasOwn(restTools,name)) return this.mcp(name.split('.')[0] as ConnectorName).call(name,input,credential,known);
+    if (!Object.hasOwn(restTools,name)) return this.mcp(name.split('.')[0] as AnyConnector).call(name,input,credential,known);
     if (Object.hasOwn(githubRestTools, name)) {
       const action = githubRestTools[name as keyof typeof githubRestTools];
       const request = action.request(action.schema.parse(input));

@@ -5,7 +5,8 @@ import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
 import { z } from 'zod';
-import { connectorNames } from './config.js';
+import { connectorNames, type AnyConnector } from './config.js';
+import { publicCustomConnector } from './custom-connectors.js';
 import { AppError } from './errors.js';
 import { resultPage, errorPage, redirectPage, toolSyncPage } from './pages.js';
 import { restToolCatalog, restTools, toolNamePattern, type ToolName } from './connectors/index.js';
@@ -18,10 +19,12 @@ import { returnUrlSchema } from './projects.js';
 import { searchTools } from './tool-search.js';
 import { OAuthError, OAuthServer, mcpScope } from './mcp/oauth.js';
 import { McpServer } from './mcp/server.js';
-import { categoryTitles, connectorCatalog, connectorCategories, connector as connectorSpec, locales, pickLocale, type ConnectorDefinition } from './connectors/catalog.js';
+import { categoryTitles, connectorCatalog, connectorCategories, connector as connectorSpec, isConnectorName, isCustomConnector, locales, pickLocale, type ConnectorDefinition } from './connectors/catalog.js';
 
 const userSchema = z.string().min(1).max(200);
 const sessionInput = z.object({ external_user_id: userSchema, return_url: returnUrlSchema.optional() }).strict();
+/** A built-in connector or a custom MCP server (`mcp_…`); whether a custom one exists, and for whom, is checked where it is used. */
+const connectorName = z.string().max(40).refine(isConnectorName).transform(name => name as AnyConnector);
 export function createApp(service: Service) {
   const app = new Hono<{ Variables: { project: Project; requestId: string } }>();
   app.use('*', async (c, next) => {
@@ -72,11 +75,13 @@ export function createApp(service: Service) {
   });
   app.get('/docs/assets/docs.css', async c => { c.header('Content-Type','text/css; charset=utf-8');return c.body(await readFile('public/docs.css','utf8')); });
   app.get('/docs/assets/docs.js', async c => { c.header('Content-Type','text/javascript; charset=utf-8');return c.body(await readFile('public/docs.js','utf8')); });
-  app.get('/connectors/:name/avatar.svg', c => {
-    const name = z.enum(connectorNames).parse(c.req.param('name'));
+  app.get('/connectors/:name/avatar.svg', async c => {
+    const name = connectorName.parse(c.req.param('name'));
+    // A custom server's badge is a monogram of its name, so it reveals nothing beyond that.
+    if (isCustomConnector(name)) await service.custom.ensure(name);
     c.header('Content-Type', 'image/svg+xml'); c.header('Cache-Control', 'public, max-age=86400'); c.header('X-Content-Type-Options', 'nosniff');
     c.header('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'");
-    return c.body(connectorCatalog[name].icon);
+    return c.body(connectorSpec(name).icon);
   });
   // The agent skill, with this deployment's MCP URL filled in.
   app.get('/skills/connany/SKILL.md', async c => {
@@ -104,10 +109,26 @@ export function createApp(service: Service) {
     return c.json({ categories, data });
   });
   app.post('/v1/connectors/:name/sessions', async c => {
-    const connector = z.enum(connectorNames).safeParse(c.req.param('name'));
+    const connector = connectorName.safeParse(c.req.param('name'));
     if (!connector.success) throw new AppError('connector_not_found','Unknown connector.',404);
     const input = sessionInput.parse(await c.req.json());
     return c.json(await service.createSession(c.get('project'), { ...input, connector: connector.data }), 201);
+  });
+  // Remote MCP servers this user added by URL (docs/custom-connectors.md). Each is visible
+  // only to its user; once added it is connected like any connector, by its `name`.
+  app.get('/v1/custom-connectors', async c => {
+    const { external_user_id: user } = z.object({ external_user_id: userSchema }).strict().parse(c.req.query());
+    const base = service.runtime.config.publicBaseUrl;
+    return c.json({ data: (await service.custom.list(c.get('project').id, user)).map(row => publicCustomConnector(row, base)) });
+  });
+  app.post('/v1/custom-connectors', async c => {
+    const input = z.object({ external_user_id: userSchema, url: z.string().min(1).max(500) }).strict().parse(await c.req.json());
+    const row = await service.custom.add(c.get('project'), input.external_user_id, input.url);
+    return c.json(publicCustomConnector(row, service.runtime.config.publicBaseUrl), 201);
+  });
+  app.delete('/v1/custom-connectors/:name', async c => {
+    const user = userSchema.parse(c.req.query('external_user_id'));
+    return c.json(await service.custom.remove(c.get('project').id, user, c.req.param('name')));
   });
   app.get('/v1/connectors/:name/sessions/:id', async c => {
     const user = userSchema.parse(c.req.query('external_user_id'));
@@ -119,9 +140,10 @@ export function createApp(service: Service) {
     const user = userSchema.parse(c.req.query('external_user_id'));
     const limit = z.coerce.number().int().min(1).max(100).parse(c.req.query('limit') || 50);
     const after = c.req.query('after') || '';
-    const connector = z.enum(connectorNames).optional().parse(c.req.query('connector'));
+    const connector = connectorName.optional().parse(c.req.query('connector'));
     const status = z.enum(['connected','reauth_required','revoked']).optional().parse(c.req.query('status'));
     const { rows } = await service.pool.query('SELECT * FROM connections WHERE project_id=$1 AND external_user_id=$2 AND id>$3 AND ($5::text IS NULL OR connector=$5) AND ($6::text IS NULL OR status=$6) ORDER BY id LIMIT $4', [c.get('project').id, user, after, limit + 1, connector ?? null, status ?? null]);
+    for (const name of new Set(rows.map(row => row.connector))) if (isCustomConnector(name)) await service.custom.ensure(name);
     return c.json({ data: (await Promise.all(rows.slice(0, limit).map(row=>service.enrichConnection(row)))).map(publicConnection), next_cursor: rows.length > limit ? rows[limit-1].id : null });
   });
   app.get('/v1/connections/:id', async c => c.json(publicConnection(await service.enrichConnection(await service.getConnection(c.get('project').id, userSchema.parse(c.req.query('external_user_id')), c.req.param('id'))))));
@@ -194,7 +216,7 @@ export function createApp(service: Service) {
     return c.html(redirectPage(url));
   });
   app.get('/oauth/:connector/callback', async c => {
-    const connector = z.enum(connectorNames).parse(c.req.param("connector"));
+    const connector = connectorName.parse(c.req.param("connector"));
     const state = z.string().length(43).parse(c.req.query('state'));
     const s = await service.findCallback(connector, state);
     const browser = getCookie(c, `connany_${s.id}`) || '';

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { connectorNames, type ConnectorName } from '../config.js';
+import { connectorNames, type AnyConnector, type ConnectorName } from '../config.js';
 import type { ToolDefinition } from '../connector-store.js';
 import { connector as connectorSpec } from '../connectors/catalog.js';
 import { toolNamePattern, type ToolName } from '../connectors/index.js';
@@ -160,7 +160,7 @@ export class McpServer {
   private async catalog(user: OAuthUser, project: Project, connector?: ConnectorName) {
     const connected = (await this.connections(user, project, connector)).filter(c => c.status === 'connected');
     const store = this.service.connectorStore.in(project.workspace_id);
-    const byConnector = new Map<ConnectorName, Connection[]>();
+    const byConnector = new Map<AnyConnector, Connection[]>();
     for (const c of connected) byConnector.set(c.connector, [...(byConnector.get(c.connector) || []), c]);
     const tools: ToolDefinition[] = [];
     for (const [name, list] of byConnector) {

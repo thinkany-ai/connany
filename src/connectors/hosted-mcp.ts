@@ -1,11 +1,11 @@
 import { AppError, UpstreamError } from '../errors.js';
 import type { Credentials, Fetcher } from './index.js';
-import { connector as definition, type ClientAuthMethod, type ConnectorName } from './catalog.js';
+import { connector as definition, type AnyConnector, type ClientAuthMethod } from './catalog.js';
 
 export interface McpClient { clientId: string; clientSecret: string; authMethod: ClientAuthMethod }
 
 export class HostedMcp {
-  constructor(private fetcher: Fetcher = fetch, private connector: ConnectorName = 'notion') {}
+  constructor(private fetcher: Fetcher = fetch, private connector: AnyConnector = 'notion') {}
   private get spec() { return definition(this.connector).mcp; }
   private get origin() { return this.spec.origin; }
   private get endpoint() { return this.spec.endpoint || '/mcp'; }
