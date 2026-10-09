@@ -295,7 +295,7 @@ SDK 会抛出 `ConnanyError`，带 `status`、`code`、`requestId` 和 `details`
 
 所有连接器的工具都来自上游官方 MCP，名称格式为 `<连接器>.<官方工具名>`，参数以 `input_schema` 为准。
 
-接入方的代码对所有连接器都一样：用 `GET /v1/connectors` 拿到可连接的列表，授权、列出工具、调用工具的接口都不区分连接器。除下面三个之外，Sentry、PostHog、Atlassian、Vercel、Supabase、Neon、Netlify、GitLab、Cloudflare、Prisma、Stripe、PayPal、Square、ClickUp、monday.com、Airtable、Todoist、Miro、Canva、Intercom、Webflow、Wix 也都走各自的官方 MCP，工具名为 `<连接器>.<官方工具名>`。少数平台不提供用户信息，这类连接显示为「<平台> 账号」，`identity.unverified` 为 true，重新授权时无法确认是同一个账号，建议在界面上提示用户。
+接入方的代码对所有连接器都一样：用 `GET /v1/connectors` 拿到可连接的列表，授权、列出工具、调用工具的接口都不区分连接器。除下面三个之外，Sentry、PostHog、Atlassian、Vercel、Supabase、Neon、Netlify、GitLab、Cloudflare、Prisma、Stripe、PayPal、Square、ClickUp、monday.com、Airtable、Todoist、Miro、Canva、Intercom、Webflow、Wix 也都走各自的官方 MCP，工具名为 `<连接器>.<官方工具名>`。Google Search Console 和 Google Analytics 没有官方托管 MCP，工具由 Connany 内置（如 `google_search_console.query_search_analytics`、`google_analytics.run_report`），调用方式相同。少数平台不提供用户信息，这类连接显示为「<平台> 账号」，`identity.unverified` 为 true，重新授权时无法确认是同一个账号，建议在界面上提示用户。
 
 ### Notion
 

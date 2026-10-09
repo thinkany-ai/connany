@@ -3,12 +3,14 @@ import type { HostedMcp } from './hosted-mcp.js';
 import type { ConnectorRuntime, Credentials, Identity } from './index.js';
 import { githubAccess } from './github-access.js';
 import { linearIdentity, notionIdentity } from './mcp-identity.js';
+import { googleAnalyticsTools, googleSearchConsoleTools, type GoogleOperation } from './google.js';
 import type { Localized } from '../i18n.js';
 
 /**
  * Built-in connector catalog. A standard hosted MCP connector (dynamic client registration,
  * PKCE, `/authorize` `/token` `/register` and the MCP endpoint on one origin) needs only an
- * entry here. Connectors with bespoke OAuth, like GitHub Apps, keep custom handling in ConnectorRuntime.
+ * entry here. Services without one use an OAuth client the administrator registers (`oauth`) and
+ * REST tools Connany implements (`rest`). GitHub Apps keep their installation handling in ConnectorRuntime.
  */
 /** One resource scope a connection can reach, e.g. a GitHub organization the App is installed in. */
 export interface AccessGrant { id: string; type: string; name: string; selection: 'all' | 'selected'; suspended: boolean; manage_url: string | null }
@@ -46,6 +48,18 @@ export interface McpSpec {
   /** RFC 8707 resource indicator: true for origin + endpoint, or the exact resource from the protected resource metadata. */
   resource?: boolean | string;
 }
+/** OAuth client the administrator registers with the service, for connectors without dynamic registration. */
+export interface OAuthSpec {
+  authorize: string; token: string;
+  /** RFC 7009 revocation endpoint. */
+  revoke?: string;
+  /** OIDC userinfo, used to identify the account. */
+  userinfo?: string;
+  scope?: string;
+  authorizeParams?: Record<string, string>;
+  /** Where administrators create the client, linked from the console. */
+  console?: { url: string; label: Localized; help: Localized };
+}
 /** Groups connectors in the console and in GET /v1/connectors. */
 export const connectorCategories = ['collaboration', 'development', 'data', 'analytics', 'payments', 'design'] as const;
 export type ConnectorCategory = typeof connectorCategories[number];
@@ -66,8 +80,12 @@ export interface ConnectorDefinition {
   icon: string;
   /** One-line capability summary for the admin card and GET /v1/connectors. */
   description: Localized;
-  auth: 'mcp' | 'github_app';
-  mcp: McpSpec;
+  /** mcp: hosted MCP with dynamic client registration; github_app and oauth: an administrator-registered client. */
+  auth: 'mcp' | 'github_app' | 'oauth';
+  mcp?: McpSpec;
+  oauth?: OAuthSpec;
+  /** Tools Connany implements against the service's REST API, instead of an upstream MCP tool list. */
+  rest?: Record<string, GoogleOperation>;
   /** Resolve the account from the token response. MCP connectors without one use OIDC claims or userinfo, see genericIdentity. */
   identify?: (mcp: HostedMcp, credential: Credentials, raw: any) => Promise<Identity>;
   /** Refresh display names for existing connections without changing account identity. */
@@ -75,6 +93,15 @@ export interface ConnectorDefinition {
   access?: ConnectorAccess;
 }
 
+const google = (scope: string, apis: string, apisEn = apis): OAuthSpec => ({
+  authorize: 'https://accounts.google.com/o/oauth2/v2/auth', token: 'https://oauth2.googleapis.com/token',
+  revoke: 'https://oauth2.googleapis.com/revoke', userinfo: 'https://openidconnect.googleapis.com/v1/userinfo',
+  scope: `openid email ${scope}`, authorizeParams: { access_type: 'offline', prompt: 'consent' },
+  console: { url: 'https://console.cloud.google.com/apis/credentials',
+    label: { 'zh-CN': '创建 Google OAuth 客户端', en: 'Create Google OAuth client' },
+    help: { 'zh-CN': `在 Google Cloud 项目中启用 ${apis}，创建「Web 应用」类型的 OAuth 客户端，并把下方回调地址加入「已获授权的重定向 URI」。`,
+      en: `Enable the ${apisEn} in a Google Cloud project, create a "Web application" OAuth client and add the callback URL below to its authorized redirect URIs.` } },
+});
 const checked = <T extends object>(identity: T) => ({...identity, identity_checked_at: new Date().toISOString()});
 
 export const connectorCatalog = {
@@ -103,6 +130,8 @@ export const connectorCatalog = {
     icon: '<svg aria-hidden="true" fill="currentColor" fill-rule="evenodd" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12 0c6.63 0 12 5.276 12 11.79-.001 5.067-3.29 9.567-8.175 11.187-.6.118-.825-.25-.825-.56 0-.398.015-1.665.015-3.242 0-1.105-.375-1.813-.81-2.181 2.67-.295 5.475-1.297 5.475-5.822 0-1.297-.465-2.344-1.23-3.169.12-.295.54-1.503-.12-3.125 0 0-1.005-.324-3.3 1.209a11.32 11.32 0 00-3-.398c-1.02 0-2.04.133-3 .398-2.295-1.518-3.3-1.209-3.3-1.209-.66 1.622-.24 2.83-.12 3.125-.765.825-1.23 1.887-1.23 3.169 0 4.51 2.79 5.527 5.46 5.822-.345.294-.66.81-.765 1.577-.69.31-2.415.81-3.495-.973-.225-.354-.9-1.223-1.845-1.209-1.005.015-.405.56.015.781.51.28 1.095 1.327 1.23 1.666.24.663 1.02 1.93 4.035 1.385 0 .988.015 1.916.015 2.196 0 .31-.225.664-.825.56C3.303 21.374-.003 16.867 0 11.791 0 5.276 5.37 0 12 0z"></path></svg>',
     auth: 'github_app',
     mcp: { origin: 'https://api.githubcopilot.com', endpoint: '/mcp/x/all' },
+    // Always offer account selection when adding or reconnecting a GitHub account.
+    oauth: { authorize: 'https://github.com/login/oauth/authorize', token: 'https://github.com/login/oauth/access_token', authorizeParams: { prompt: 'select_account' } },
     access: githubAccess,
   },
   linear: {
@@ -322,6 +351,31 @@ export const connectorCatalog = {
     icon: '<svg aria-hidden="true" fill="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="m0 7.354 2.113 9.292h.801a1.54 1.54 0 0 0 1.506-1.218l1.351-6.34a.171.171 0 0 1 .167-.137c.08 0 .15.058.167.137l1.352 6.34a1.54 1.54 0 0 0 1.506 1.218h.805l2.113-9.292h-.565c-.62 0-1.159.43-1.296 1.035l-1.26 5.545-1.106-5.176a1.76 1.76 0 0 0-2.19-1.324c-.639.176-1.113.716-1.251 1.365l-1.094 5.127-1.26-5.537A1.33 1.33 0 0 0 .563 7.354H0zm13.992 0a.951.951 0 0 0-.951.95v8.342h.635a.952.952 0 0 0 .951-.95V7.353h-.635zm1.778 0 3.158 4.66-3.14 4.632h1.325c.368 0 .712-.181.918-.486l1.756-2.59a.12.12 0 0 1 .197 0l1.754 2.59c.206.305.55.486.918.486h1.326l-3.14-4.632L24 7.354h-1.326c-.368 0-.712.181-.918.486l-1.772 2.617a.12.12 0 0 1-.197 0L18.014 7.84a1.108 1.108 0 0 0-.918-.486H15.77z"/></svg>',
     auth: 'mcp',
     mcp: { origin: 'https://mcp.wix.com', oauth: { authorize: 'https://mcp.wix.com/authorize', token: 'https://mcp.wix.com/token', register: 'https://mcp.wix.com/register', revoke: 'https://mcp.wix.com/token' }, scope: 'offline_access', resource: 'https://mcp.wix.com/mcp' },
+  },
+  // Google offers no hosted MCP for Search Console or Analytics and no dynamic registration:
+  // administrators create one OAuth client (it can serve both) and Connany calls the REST APIs.
+  // Offline access with consent returns a refresh token on every authorization.
+  google_search_console: {
+    label: 'Google Search Console',
+    category: 'analytics',
+    website: 'https://search.google.com/search-console',
+    description: { 'zh-CN': '搜索表现、索引状态与站点地图', en: 'Search performance, indexing and sitemaps' },
+    // Google Search Console logomark, redrawn as a monochrome vector from the official logo; gaps separate the overlapping shapes.
+    icon: '<svg aria-hidden="true" fill="currentColor" viewBox="3 2.5 34 34" xmlns="http://www.w3.org/2000/svg"><defs><mask id="gsc-behind-green" maskUnits="userSpaceOnUse" x="0" y="0" width="40" height="40"><rect width="40" height="40" fill="#fff"/><rect x="16" y="12" width="11.5" height="20.75" rx="5.75" fill="#000" stroke="#000" stroke-width="3.2"/></mask><mask id="gsc-behind-lens" maskUnits="userSpaceOnUse" x="0" y="0" width="40" height="40"><rect width="40" height="40" fill="#fff"/><circle cx="13.25" cy="26.25" r="5.75" fill="#000" stroke="#000" stroke-width="3.2"/></mask></defs><rect x="24" y="3.75" width="11.5" height="29" rx="5.75" mask="url(#gsc-behind-green)"/><rect x="16" y="12" width="11.5" height="20.75" rx="5.75" mask="url(#gsc-behind-lens)"/><circle cx="13.25" cy="26.25" r="5.75"/><path d="M9.2 30.2 5.5 34" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg>',
+    auth: 'oauth',
+    oauth: google('https://www.googleapis.com/auth/webmasters.readonly', 'Search Console API'),
+    rest: googleSearchConsoleTools,
+  },
+  google_analytics: {
+    label: 'Google Analytics',
+    category: 'analytics',
+    website: 'https://analytics.google.com',
+    description: { 'zh-CN': 'GA4 报表、实时数据与媒体资源', en: 'GA4 reports, realtime data and properties' },
+    // Simple Icons (CC0).
+    icon: '<svg aria-hidden="true" fill="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M22.84 2.9982v17.9987c.0086 1.6473-1.3197 2.9897-2.967 2.9984a2.9808 2.9808 0 01-.3677-.0208c-1.528-.226-2.6477-1.5558-2.6105-3.1V3.1204c-.0369-1.5458 1.0856-2.8762 2.6157-3.1 1.6361-.1915 3.1178.9796 3.3093 2.6158.0137.1201.0204.2408.0202.3619zM4.1326 18.0548c-1.6417 0-2.9726 1.331-2.9726 2.9726C1.16 22.6691 2.4909 24 4.1326 24s2.9726-1.3309 2.9726-2.9726-1.331-2.9726-2.9726-2.9726zm7.8728-9.0098c-.0171 0-.0342 0-.0513.0003-1.6495.0904-2.9293 1.474-2.891 3.1256v7.9846c0 2.167.9535 3.4825 2.3505 3.763 1.6118.3266 3.1832-.7152 3.5098-2.327.04-.1974.06-.3983.0593-.5998v-8.9585c.003-1.6474-1.33-2.9852-2.9773-2.9882z"/></svg>',
+    auth: 'oauth',
+    oauth: google('https://www.googleapis.com/auth/analytics.readonly', 'Google Analytics Data API 和 Google Analytics Admin API', 'Google Analytics Data API and Google Analytics Admin API'),
+    rest: googleAnalyticsTools,
   },
 } satisfies Record<string, ConnectorDefinition>;
 

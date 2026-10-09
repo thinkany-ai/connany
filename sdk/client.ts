@@ -1,7 +1,7 @@
 /** Server-side SDK. Do not bundle the project key into a browser, mobile app or LLM prompt. */
 /** Groups connectors for display: collaboration, development, data, analytics, payments, design. */
 export type ConnectorCategory = 'collaboration' | 'development' | 'data' | 'analytics' | 'payments' | 'design';
-export type ConnectorName = 'notion' | 'github' | 'linear' | 'sentry' | 'posthog' | 'atlassian' | 'vercel' | 'supabase' | 'neon' | 'netlify' | 'gitlab' | 'cloudflare' | 'prisma' | 'stripe' | 'paypal' | 'square' | 'clickup' | 'monday' | 'airtable' | 'todoist' | 'miro' | 'canva' | 'intercom' | 'webflow' | 'wix';
+export type ConnectorName = 'notion' | 'github' | 'linear' | 'sentry' | 'posthog' | 'atlassian' | 'vercel' | 'supabase' | 'neon' | 'netlify' | 'gitlab' | 'cloudflare' | 'prisma' | 'stripe' | 'paypal' | 'square' | 'clickup' | 'monday' | 'airtable' | 'todoist' | 'miro' | 'canva' | 'intercom' | 'webflow' | 'wix' | 'google_search_console' | 'google_analytics';
 export interface ConnectSession {
   id: string; connector: ConnectorName; status: 'pending' | 'authorizing' | 'processing' | 'connected' | 'error' | 'expired';
   expires_at: string; connect_url?: string; connection_id?: string | null; error_code?: string | null;

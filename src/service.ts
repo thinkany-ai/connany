@@ -149,7 +149,7 @@ export class Service {
         const { credential, raw } = await runtime.exchange(s.connector, code!, this.vault.open<string>(s.verifier_ciphertext, s.id));
         const identity = await runtime.identify(s.connector, credential, raw);
         // Refresh the connector's tool catalog with the user's own fresh credential; optional.
-        try { await this.connectorStore.in(await this.workspaceOf(s.project_id)).saveTools(s.connector, await runtime.mcp(s.connector).tools(credential)); } catch {}
+        try { await this.connectorStore.in(await this.workspaceOf(s.project_id)).saveTools(s.connector, await runtime.tools(s.connector, credential)); } catch {}
         connection = await transaction(this.pool, async db => {
           // Serialize identity deduplication for a project; connection-level locks serialize reconnect/disconnect.
           const project = (await db.query('SELECT enabled FROM projects WHERE id=$1 FOR UPDATE', [s.project_id])).rows[0];
@@ -202,7 +202,7 @@ export class Service {
         const runtime = await this.connectorStore.resolve(s.connector, s.connector_app_id);
         const { credential } = await runtime.exchange(s.connector, code!, this.vault.open<string>(s.verifier_ciphertext, s.id));
         try {
-          const tools = await runtime.mcp(s.connector).tools(credential);
+          const tools = await runtime.tools(s.connector, credential);
           await this.connectorStore.in(s.workspace_id).saveTools(s.connector, tools); toolCount = tools.length;
         } finally {
           // Token-level revocation: other grants of the same account are unaffected.
@@ -248,7 +248,7 @@ export class Service {
             const catalog = definition ? null : await this.connectorStore.in(await this.workspaceOf(project, db)).catalog(c.connector);
             return runtime.execute(tool, parsed, credential, !!catalog?.some(t => t.name === tool));
           }
-          const tools = await runtime.mcp(c.connector).tools(credential);
+          const tools = await runtime.tools(c.connector, credential);
           await this.connectorStore.in(await this.workspaceOf(project, db)).saveTools(c.connector, tools, db);
           return tools;
         };

@@ -15,7 +15,7 @@ test('every hosted MCP connector declares HTTPS endpoints, a resource on its own
   if(spec.auth!=='mcp')continue;
   const mcp=new HostedMcp(fetch,name);
   for(const kind of ['authorize','token','register'] as const)assert.match(mcp.oauthUrl(kind)!,/^https:\/\//,`${name} ${kind}`);
-  if(typeof spec.mcp.resource==='string')assert.equal(new URL(spec.mcp.resource).origin,spec.mcp.origin,name);
+  if(typeof spec.mcp!.resource==='string')assert.equal(new URL(spec.mcp!.resource).origin,spec.mcp!.origin,name);
  }
 });
 
@@ -82,7 +82,7 @@ test('registration failures keep the upstream OAuth error for administrators',as
 test('the SDK names every catalog connector and every connector has a category',async()=>{
  const {readFile}=await import('node:fs/promises');const sdk=await readFile('sdk/client.ts','utf8');
  const union=sdk.match(/export type ConnectorName = ([^;]+);/)![1];
- assert.deepEqual([...union.matchAll(/'([a-z]+)'/g)].map(m=>m[1]).sort(),[...connectorNames].sort());
+ assert.deepEqual([...union.matchAll(/'([a-z_]+)'/g)].map(m=>m[1]).sort(),[...connectorNames].sort());
  const {connectorCategories}=await import('../src/connectors/catalog.js');
  for(const name of connectorNames)assert((connectorCategories as readonly string[]).includes(connector(name).category),name);
 });

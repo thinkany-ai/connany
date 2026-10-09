@@ -21,7 +21,7 @@ test('GitHub official MCP uses existing user token and all-tool endpoint; tool e
  await runtime.execute('github.create_issue',{title:'Test'},{accessToken:'user-token'});assert.equal(writes,1);
  denied=true;await assert.rejects(()=>runtime.execute('github.create_issue',{title:'Test'},{accessToken:'user-token'}),{code:'mcp_tool_error'});assert.equal(writes,2);
  const auth=new URL(runtime.authorizeUrl('github','state','verifier'));assert.equal(auth.origin,'https://github.com');assert.equal(auth.searchParams.get('client_id'),config.connectors.github.clientId);
- await assert.rejects(()=>runtime.mcp('github').register('https://example.com'),{code:'github_app_required'});
+ await assert.rejects(()=>runtime.mcp('github').register('https://example.com'),{code:'oauth_client_required'});
 });
 test('catalog lists every connector, connection tools are scoped to the user, and the SDK adapter uses the connection',async()=>{
  const catalog=[{name:'github.get_me',connector:'github',description:'Me',read_only:true,required_permissions:[],input_schema:{type:'object'}},{name:'github.create_issue',connector:'github',description:'Create issue',read_only:false,required_permissions:[],input_schema:{type:'object'}},{name:'notion.notion-search',connector:'notion',description:'Search',read_only:true,required_permissions:[],input_schema:{type:'object'}}];
