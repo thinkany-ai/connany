@@ -47,7 +47,7 @@ JSON 请求使用 Content-Type: application/json，请求体上限 32 KB。每�
 
 | Query 参数 | 类型 | 说明 |
 | --- | --- | --- |
-| lang | string，可选 | 返回文字的语言：en 或 zh-CN。不传时按请求头 Accept-Language 选择，都没有时为英文 |
+| lang | string，可选 | 返回文字的语言：en、zh-CN 或 zh-HK（香港繁体中文）。不传时按请求头 Accept-Language 选择：zh-TW、zh-MO、zh-Hant 返回 zh-HK，其他中文返回 zh-CN，都没有时为英文 |
 
 请求示例：
 

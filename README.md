@@ -57,7 +57,7 @@ To use an existing database, set `DATABASE_URL` in `.env` and skip the Docker st
 - **Hosted MCP connectors (24):** click **Enable** in the console. Connany registers an OAuth client with the provider (RFC 7591), using a public client with PKCE or a confidential client as the provider requires.
 - **GitHub:** create a GitHub App and enter its Client ID, Client Secret and App slug in the console. Users also install the App and choose repositories.
 
-The list is also available to agents through `GET /v1/connectors` (enabled connectors with localized categories and descriptions, `lang=en|zh-CN`).
+The list is also available to agents through `GET /v1/connectors` (enabled connectors with localized categories and descriptions, `lang=en|zh-CN|zh-HK`).
 
 After enabling a connector, click **Sync tool catalog** on its card once: upstream MCP servers list tools only to signed-in users, so you authorize with your own account and Connany keeps only the tool definitions. Users must still authorize their own accounts. GitHub repository access also requires installing the App and selecting repositories. See the [connector setup guide (Chinese)](docs/connector-setup.md).
 

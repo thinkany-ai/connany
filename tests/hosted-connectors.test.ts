@@ -88,12 +88,21 @@ test('the SDK names every catalog connector and every connector has a category',
 });
 
 test('connector descriptions and category titles exist in every supported language',async()=>{
- const {categoryTitles,connectorCategories,locales,pickLocale}=await import('../src/connectors/catalog.js');
+ const {categoryTitles,connectorCategories}=await import('../src/connectors/catalog.js');
+ const {locales,localize,pickLocale}=await import('../src/i18n.js');
  for(const locale of locales){
-  for(const name of connectorNames)assert(connector(name).description[locale]?.trim(),`${name} ${locale}`);
-  for(const category of connectorCategories)assert(categoryTitles[category][locale]?.trim(),`${category} ${locale}`);
+  for(const name of connectorNames)assert(localize(connector(name).description,locale).trim(),`${name} ${locale}`);
+  for(const category of connectorCategories)assert(localize(categoryTitles[category],locale).trim(),`${category} ${locale}`);
  }
  assert.equal(pickLocale(undefined,'fr-FR,zh-CN;q=0.8'),'zh-CN');assert.equal(pickLocale('en','zh-CN'),'en');assert.equal(pickLocale(undefined,undefined),'en');
+});
+
+test('locale negotiation maps region and script subtags to the closest supported locale',async()=>{
+ const {pickLocale}=await import('../src/i18n.js');
+ for(const tag of ['zh-HK','zh-hk','zh-MO','zh-TW','zh-Hant','zh-Hant-CN'])assert.equal(pickLocale(tag),'zh-HK',tag);
+ for(const tag of ['zh','zh-CN','zh-SG','zh-Hans','zh-Hans-HK'])assert.equal(pickLocale(tag),'zh-CN',tag);
+ assert.equal(pickLocale(undefined,'en;q=0.5,zh-HK'),'zh-HK');assert.equal(pickLocale(undefined,'zh-HK;q=0,en'),'en');
+ assert.equal(pickLocale(undefined,'*,fr;q=0.9'),'en');assert.equal(pickLocale('not a tag','zh-TW'),'zh-HK');
 });
 
 test('connector MCP headers are sent on every request and large tool catalogs are accepted',async()=>{

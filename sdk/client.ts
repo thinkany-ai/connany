@@ -37,7 +37,7 @@ export class Connany {
     return result as T;
   }
   /** Enabled connectors and their categories. Descriptions and category titles follow `lang` (default English). */
-  connectors(options: { lang?: 'en' | 'zh-CN' } = {}) {
+  connectors(options: { lang?: 'en' | 'zh-CN' | 'zh-HK' } = {}) {
     return this.request<{ categories: { name: ConnectorCategory; title: string }[]; data: { name: ConnectorName; title: string; category: ConnectorCategory; description: string; avatar_url: string; tools_synced_at: string | null }[] }>(`/v1/connectors${options.lang ? `?${new URLSearchParams({ lang: options.lang })}` : ''}`);
   }
   /** Tools the user can use now through an authorized connection. Use this in agent conversations. */
