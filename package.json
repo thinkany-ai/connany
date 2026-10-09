@@ -23,6 +23,7 @@
   "dependencies": {
     "@hono/node-server": "^2.1.1",
     "hono": "^4.13.9",
+    "opencc-js": "^1.4.2",
     "pg": "^8.23.0",
     "zod": "^4.6.5"
   },

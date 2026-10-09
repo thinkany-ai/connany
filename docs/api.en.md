@@ -47,7 +47,7 @@ Returns the connectors an administrator has enabled, with their categories, read
 
 | Query parameter | Type | Description |
 | --- | --- | --- |
-| lang | string, optional | Language of returned text: en or zh-CN. Without it the Accept-Language header decides; English otherwise |
+| lang | string, optional | Language of returned text: en, zh-CN or zh-HK (Traditional Chinese, Hong Kong). Without it the Accept-Language header decides: zh-TW, zh-MO and zh-Hant return zh-HK, other Chinese tags return zh-CN; English otherwise |
 
 Request example:
 

@@ -4,6 +4,7 @@ import type { ConnectorRuntime, Credentials, Identity } from './index.js';
 import { githubAccess } from './github-access.js';
 import { linearIdentity, notionIdentity } from './mcp-identity.js';
 import { googleAnalyticsTools, googleSearchConsoleTools, type GoogleOperation } from './google.js';
+import type { Localized } from '../i18n.js';
 
 /**
  * Built-in connector catalog. A standard hosted MCP connector (dynamic client registration,
@@ -58,19 +59,6 @@ export interface OAuthSpec {
   authorizeParams?: Record<string, string>;
   /** Where administrators create the client, linked from the console. */
   console?: { url: string; label: Localized; help: Localized };
-}
-/** Languages for connector text returned by the API and shown in the console. */
-export const locales = ['en', 'zh-CN'] as const;
-export type Locale = typeof locales[number];
-export type Localized = Record<Locale, string>;
-/** Chooses a locale from an explicit `lang` value, then an Accept-Language header; English otherwise. */
-export function pickLocale(lang?: string | null, acceptLanguage?: string | null): Locale {
-  for (const candidate of [lang, ...(acceptLanguage || '').split(',').map(part => part.split(';')[0].trim())]) {
-    const value = candidate?.toLowerCase();
-    if (value?.startsWith('zh')) return 'zh-CN';
-    if (value?.startsWith('en')) return 'en';
-  }
-  return 'en';
 }
 /** Groups connectors in the console and in GET /v1/connectors. */
 export const connectorCategories = ['collaboration', 'development', 'data', 'analytics', 'payments', 'design'] as const;
