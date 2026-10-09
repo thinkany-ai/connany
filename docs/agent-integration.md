@@ -64,7 +64,7 @@ const { categories, data: connectors } = await connany.connectors({ lang: 'zh-CN
 // [{ name: 'notion', title: 'Notion', description: '页面、数据库与工作区搜索', avatar_url: 'https://…/connectors/notion/avatar.svg', tools_synced_at: … }, …]
 ```
 
-对应 `GET /v1/connectors?lang=zh-CN`，只返回管理员已启用的连接器。`categories` 是这些连接器所属的分类（按推荐顺序），可以用来分组展示；分类名称和连接器描述按 `lang` 返回中文或英文，不传时按 `Accept-Language`，默认英文。用 `title`、`description` 和 `avatar_url` 渲染「连接账号」入口（`avatar_url` 可直接放进 `<img>`）。如果想在用户连接之前介绍某个连接器能做什么，可以读工具目录 `connany.toolCatalog({ connector: 'notion' })`（`GET /v1/tools?connector=notion`）。
+对应 `GET /v1/connectors?lang=zh-CN`，只返回管理员已启用的连接器。`categories` 是这些连接器所属的分类（按推荐顺序），可以用来分组展示；分类名称和连接器描述按 `lang` 返回英文（`en`）、简体中文（`zh-CN`）或香港繁体中文（`zh-HK`），不传时按 `Accept-Language`，默认英文。用 `title`、`description` 和 `avatar_url` 渲染「连接账号」入口（`avatar_url` 可直接放进 `<img>`）。如果想在用户连接之前介绍某个连接器能做什么，可以读工具目录 `connany.toolCatalog({ connector: 'notion' })`（`GET /v1/tools?connector=notion`）。
 
 ### 2.2 创建授权会话，把链接交给用户
 
