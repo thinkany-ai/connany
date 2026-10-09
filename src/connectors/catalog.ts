@@ -1,4 +1,4 @@
-import { UpstreamError } from '../errors.js';
+import { AppError, UpstreamError } from '../errors.js';
 import type { HostedMcp } from './hosted-mcp.js';
 import type { ConnectorRuntime, Credentials, Identity } from './index.js';
 import { githubAccess } from './github-access.js';
@@ -73,7 +73,8 @@ export const categoryTitles: Record<ConnectorCategory, Localized> = {
 };
 export interface ConnectorDefinition {
   label: string;
-  category: ConnectorCategory;
+  /** `custom`: a server a user added by URL, never listed in the shared catalog. */
+  category: ConnectorCategory | 'custom';
   /** Official product homepage linked from the admin card. */
   website: string;
   /** Inline SVG or short text rendered inside the connector badge. */
@@ -381,4 +382,24 @@ export const connectorCatalog = {
 
 export type ConnectorName = keyof typeof connectorCatalog;
 export const connectorNames = Object.keys(connectorCatalog) as [ConnectorName, ...ConnectorName[]];
-export const connector = (name: ConnectorName): ConnectorDefinition => connectorCatalog[name];
+/**
+ * A remote MCP server one user added by URL (src/custom-connectors.ts). Its definition lives in
+ * the database, not here, and is loaded into `customDefinitions` before any code path reads it.
+ */
+export type CustomConnectorName = `mcp_${string}`;
+/** Built-in or custom. Built-in names never start with `mcp_`. */
+export type AnyConnector = ConnectorName | CustomConnectorName;
+export const customNamePattern = /^mcp_[a-z0-9]{10}$/;
+export const isCustomConnector = (name: string): name is CustomConnectorName => customNamePattern.test(name);
+export const isConnectorName = (name: string): name is AnyConnector => Object.hasOwn(connectorCatalog, name) || isCustomConnector(name);
+/**
+ * Definitions of custom connectors loaded so far. A definition never changes after it is
+ * created (its URL and endpoints are fixed), so a process may keep it for its lifetime;
+ * deleting a connector removes its entry here and its rows everywhere.
+ */
+export const customDefinitions = new Map<CustomConnectorName, ConnectorDefinition>();
+export const connector = (name: AnyConnector): ConnectorDefinition => {
+  const found = Object.hasOwn(connectorCatalog, name) ? (connectorCatalog as Record<string, ConnectorDefinition>)[name] : customDefinitions.get(name as CustomConnectorName);
+  if (!found) throw new AppError('connector_not_found', 'Unknown connector.', 404);
+  return found;
+};

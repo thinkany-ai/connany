@@ -1,16 +1,17 @@
 import type pg from 'pg';
 import { ConnectorStore } from './connector-store.js';
-import type { ConnectorName } from './config.js';
+import type { AnyConnector } from './config.js';
+import { CustomConnectors } from './custom-connectors.js';
 import { Vault, hash, id, randomToken } from './crypto.js';
 import { event, transaction } from './db.js';
 import { AppError, UpstreamError } from './errors.js';
 import { restTools, toolNamePattern, type ToolName, type Credentials, ConnectorRuntime } from './connectors/index.js';
-import { connector as connectorSpec } from './connectors/catalog.js';
+import { connector as connectorSpec, isCustomConnector } from './connectors/catalog.js';
 import { defaultWorkspaceId } from './workspaces.js';
 
 export interface Project { id: string; workspace_id: string; name: string; return_urls: string[]; api_key_id: string | null; kind?: 'api' | 'personal' }
 export interface Connection {
-  id: string; project_id: string; external_user_id: string; connector: ConnectorName; connector_app_id: string | null;
+  id: string; project_id: string; external_user_id: string; connector: AnyConnector; connector_app_id: string | null;
   status: string; identity: Record<string, any>; credential_ciphertext: string | null;
   expires_at: Date | null; revocation_status: string; created_at: Date; updated_at: Date;
 }
@@ -25,8 +26,9 @@ export function publicSession(s: any) {
 }
 export class Service {
   public connectorStore: ConnectorStore;
+  public custom: CustomConnectors;
   private initialization?: Promise<void>;
-  constructor(public pool: pg.Pool, public runtime: ConnectorRuntime, public vault: Vault) { this.connectorStore = new ConnectorStore(pool, runtime, vault); }
+  constructor(public pool: pg.Pool, public runtime: ConnectorRuntime, public vault: Vault) { this.connectorStore = new ConnectorStore(pool, runtime, vault); this.custom = new CustomConnectors(pool, runtime, vault); }
   initialize() {
     return this.initialization ||= this.connectorStore.bootstrap().catch(error => { this.initialization = undefined; throw error; });
   }
@@ -64,7 +66,7 @@ export class Service {
    * Workspace whose connector configuration serves a project. Personal projects use the
    * user's own connector when enabled, otherwise the platform's (the default workspace).
    */
-  async connectorWorkspace(project: { workspace_id: string; kind?: string }, connector: ConnectorName) {
+  async connectorWorkspace(project: { workspace_id: string; kind?: string }, connector: AnyConnector) {
     if (project.kind !== 'personal' || project.workspace_id === defaultWorkspaceId) return project.workspace_id;
     const { rowCount } = await this.pool.query('SELECT 1 FROM connectors WHERE workspace_id=$1 AND name=$2 AND enabled AND active_app_id IS NOT NULL', [project.workspace_id, connector]);
     return rowCount ? project.workspace_id : defaultWorkspaceId;
@@ -87,6 +89,7 @@ export class Service {
   async getConnection(project: string, user: string, connection: string, db: pg.Pool | pg.PoolClient = this.pool, lock = false): Promise<Connection> {
     const result = await db.query(`SELECT * FROM connections WHERE id=$1 AND project_id=$2 AND external_user_id=$3${lock ? ' FOR UPDATE' : ''}`, [connection, project, user]);
     if (!result.rows[0]) throw new AppError('not_found', 'Connection not found.', 404);
+    if (isCustomConnector(result.rows[0].connector)) await this.custom.ensure(result.rows[0].connector, db);
     return result.rows[0];
   }
   async enrichConnection(c: Connection): Promise<Connection> {
@@ -97,7 +100,9 @@ export class Service {
     catch (error) { if (!(error instanceof AppError)) throw error; }
     return this.getConnection(c.project_id,c.external_user_id,c.id);
   }
-  async createSession(project: Project, input: { external_user_id: string; connector: ConnectorName; return_url?: string; agent_name?: string }, reconnectId?: string) {
+  async createSession(project: Project, input: { external_user_id: string; connector: AnyConnector; return_url?: string; agent_name?: string }, reconnectId?: string) {
+    // A custom server exists only for the user who added it.
+    if (isCustomConnector(input.connector)) await this.custom.owned(input.connector, project.id, input.external_user_id);
     const active = await this.connectorStore.in(await this.connectorWorkspace(project, input.connector)).active(input.connector);
     if (reconnectId && connectorSpec(input.connector).auth === 'mcp') {
       const old = await this.getConnection(project.id,input.external_user_id,reconnectId);
@@ -113,6 +118,7 @@ export class Service {
     const { rows } = await this.pool.query(`SELECT s.*, p.name AS project_name, p.workspace_id AS project_workspace_id, p.kind AS project_kind FROM connect_sessions s JOIN projects p ON p.id=s.project_id WHERE s.link_hash=$1 AND p.enabled=true`, [hash(token)]);
     const s = rows[0];
     if (!s || new Date(s.expires_at).getTime() <= Date.now() || !['pending','authorizing'].includes(s.status)) throw new AppError('session_unavailable', 'This connection link has expired or was already used. Request a new link from your agent.', 410);
+    if (isCustomConnector(s.connector)) await this.custom.ensure(s.connector);
     return s;
   }
   /**
@@ -130,7 +136,8 @@ export class Service {
     if (!rowCount) throw new AppError('session_unavailable', 'This connection link was already used.', 410);
     return { session: s, browser, url };
   }
-  async findCallback(connector: ConnectorName, state: string) {
+  async findCallback(connector: AnyConnector, state: string) {
+    if (isCustomConnector(connector)) await this.custom.ensure(connector);
     const { rows } = await this.pool.query(`SELECT * FROM connect_sessions WHERE connector=$1 AND state_hash=$2 AND status='authorizing' AND expires_at>now()`, [connector, hash(state)]);
     if (!rows[0]) throw new AppError('invalid_state', 'This authorization has expired or was already completed. Request a new link.', 400);
     return rows[0];
@@ -186,7 +193,7 @@ export class Service {
    * Start an administrator authorization whose only purpose is reading the connector's tool
    * catalog. No connection is created and the credential is revoked right after the sync.
    */
-  async beginToolSync(connector: ConnectorName, adminId: string, workspaceId: string) {
+  async beginToolSync(connector: AnyConnector, adminId: string, workspaceId: string) {
     const active = await this.connectorStore.in(workspaceId).active(connector);
     const sessionId = id('cs'); const state = randomToken(); const browser = randomToken(); const verifier = randomToken();
     const url = active.runtime.authorizeUrl(connector, state, verifier);
@@ -301,14 +308,16 @@ export class Service {
     const queue = [...rows];
     await Promise.all(Array.from({ length: Math.min(4, queue.length) }, async () => {
       for (let c = queue.shift(); c; c = queue.shift()) {
-        try { await (await this.connectorStore.resolve(c.connector, c.connector_app_id)).revoke(c.connector, this.vault.open<Credentials>(c.credential_ciphertext!, this.context(c))); }
+        try { if (isCustomConnector(c.connector)) await this.custom.ensure(c.connector); await (await this.connectorStore.resolve(c.connector, c.connector_app_id)).revoke(c.connector, this.vault.open<Credentials>(c.credential_ciphertext!, this.context(c))); }
         catch { /* Local deletion proceeds; the upstream grant can still be removed by the user. */ }
       }
     }));
     await transaction(this.pool, async db => {
       await db.query('SELECT 1 FROM projects WHERE id=$1 FOR UPDATE', [projectId]);
-      for (const table of ['connect_sessions', 'events', 'rate_limits', 'connections', 'api_keys', 'projects'])
-        await db.query(`DELETE FROM ${table} WHERE ${table === 'projects' ? 'id' : 'project_id'}=$1`, [projectId]);
+      for (const table of ['connect_sessions', 'events', 'rate_limits', 'connections', 'api_keys'])
+        await db.query(`DELETE FROM ${table} WHERE project_id=$1`, [projectId]);
+      await this.custom.deleteForProject(db, projectId);
+      await db.query('DELETE FROM projects WHERE id=$1', [projectId]);
     });
     return { revoked: rows.length };
   }

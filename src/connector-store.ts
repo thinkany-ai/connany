@@ -1,6 +1,6 @@
 import type pg from 'pg';
 import { z } from 'zod';
-import type { Config, ConnectorName } from './config.js';
+import type { AnyConnector, Config, ConnectorName } from './config.js';
 import { connectorNames } from './config.js';
 import { connector as connectorSpec } from './connectors/catalog.js';
 import { Vault, id } from './crypto.js';
@@ -22,7 +22,7 @@ export interface ConnectorView {
   built_in_tools?: boolean;
 }
 /** A tool definition in the connector catalog. Never contains user data. */
-export interface ToolDefinition { name: string; connector: ConnectorName; description: string; read_only: boolean; required_permissions: string[]; input_schema: Record<string, unknown> }
+export interface ToolDefinition { name: string; connector: AnyConnector; description: string; read_only: boolean; required_permissions: string[]; input_schema: Record<string, unknown> }
 export class ConnectorStore {
   constructor(public pool: pg.Pool, public base: ConnectorRuntime, private vault: Vault, public workspaceId = defaultWorkspaceId) {}
   /** The same store scoped to another workspace. */
@@ -65,21 +65,21 @@ export class ConnectorStore {
         github_app_slug: slug, callback_url: this.base.callback(name), updated_at: r?.updated_at || null, ...tools };
     });
   }
-  async saveTools(name: ConnectorName, tools: ToolDefinition[], db: pg.Pool | pg.PoolClient = this.pool) {
+  async saveTools(name: AnyConnector, tools: ToolDefinition[], db: pg.Pool | pg.PoolClient = this.pool) {
     // Built-in REST catalogs ship with the code and are never cached.
     if (connectorSpec(name).rest) return;
     await db.query(`INSERT INTO connector_tools(workspace_id,connector,tools,synced_at) VALUES($1,$2,$3,now())
       ON CONFLICT(workspace_id,connector) DO UPDATE SET tools=EXCLUDED.tools,synced_at=now()`, [this.workspaceId, name, JSON.stringify(tools)]);
   }
-  /** Tool catalogs of enabled connectors. */
+  /** Tool catalogs of enabled built-in connectors. Custom servers (`mcp_…`) belong to one user and are never listed here. */
   async tools(): Promise<ToolDefinition[]> {
     const { rows } = await this.pool.query(`SELECT t.tools FROM connector_tools t JOIN connectors s ON s.workspace_id=t.workspace_id AND s.name=t.connector
-      WHERE t.workspace_id=$1 AND s.enabled=true AND s.active_app_id IS NOT NULL ORDER BY t.connector`, [this.workspaceId]);
-    const enabled = (await this.pool.query('SELECT name FROM connectors WHERE workspace_id=$1 AND enabled=true AND active_app_id IS NOT NULL', [this.workspaceId])).rows.map(r => r.name as ConnectorName);
+      WHERE t.workspace_id=$1 AND s.enabled=true AND s.active_app_id IS NOT NULL AND t.connector NOT LIKE 'mcp\\_%' ORDER BY t.connector`, [this.workspaceId]);
+    const enabled = (await this.pool.query("SELECT name FROM connectors WHERE workspace_id=$1 AND enabled=true AND active_app_id IS NOT NULL AND name NOT LIKE 'mcp\\_%'", [this.workspaceId])).rows.map(r => r.name as ConnectorName);
     return [...rows.flatMap(row => row.tools), ...enabled.filter(name => connectorSpec(name).rest).flatMap(name => restToolCatalog(name))];
   }
   /** Cached catalog of one connector regardless of whether it accepts new connections; null if never synced. */
-  async catalog(name: ConnectorName): Promise<ToolDefinition[] | null> {
+  async catalog(name: AnyConnector): Promise<ToolDefinition[] | null> {
     if (connectorSpec(name).rest) return restToolCatalog(name);
     const { rows } = await this.pool.query('SELECT tools FROM connector_tools WHERE workspace_id=$1 AND connector=$2', [this.workspaceId, name]);
     return rows[0]?.tools ?? null;
@@ -131,12 +131,12 @@ export class ConnectorStore {
       await db.query('INSERT INTO admin_audit(admin_id,action,target) VALUES($1,$2,$3)', [adminId, 'connector.saved', name]);
     });
   }
-  async active(name: ConnectorName) {
+  async active(name: AnyConnector) {
     const { rows } = await this.pool.query('SELECT active_app_id FROM connectors WHERE workspace_id=$1 AND name=$2 AND enabled=true', [this.workspaceId, name]);
     if (!rows[0]?.active_app_id) throw new AppError('connector_not_configured', 'This connector is not accepting new connections.', 503);
     return { appId: rows[0].active_app_id as string, runtime: await this.resolve(name, rows[0].active_app_id) };
   }
-  async resolve(name: ConnectorName, appId: string | null | undefined, db: pg.Pool | pg.PoolClient = this.pool) {
+  async resolve(name: AnyConnector, appId: string | null | undefined, db: pg.Pool | pg.PoolClient = this.pool) {
     if (!appId && connectorSpec(name).auth === 'mcp') throw new AppError('reauth_required', 'Create a new MCP connection.', 409);
     if (!appId) {
       if (this.base.enabled(name)) return this.base;

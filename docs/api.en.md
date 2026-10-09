@@ -411,6 +411,41 @@ Events are ordered by seq. Store next_cursor and pass it as after on the next po
 
 Events belong to the current project and exclude resource content and credentials. Handle unfamiliar event types gracefully.
 
+## Custom MCP servers
+
+A user can add a remote MCP server that is not in the catalog by its URL. It then becomes a connector that belongs to that user alone, named like `mcp_1a2b3c4d5e`, and is used like any connector: `POST /v1/connectors/{name}/sessions` to authorize, then list tools, call tools and disconnect.
+
+`POST /v1/custom-connectors`
+
+```bash
+curl -X POST "$CONNANY_BASE_URL/v1/custom-connectors" \
+  -H "Authorization: Bearer $CONNANY_API_KEY" -H "Content-Type: application/json" \
+  -d '{"external_user_id":"user_123","url":"https://mcp.example.com/mcp"}'
+```
+
+Response (201):
+
+```json
+{"name":"mcp_1a2b3c4d5e","title":"Example","url":"https://mcp.example.com/mcp","website":"https://mcp.example.com","avatar_url":"https://connect.example.com/connectors/mcp_1a2b3c4d5e/avatar.svg","created_at":"2026-10-09T08:00:00.000Z"}
+```
+
+- Connany discovers authorization as the MCP authorization spec describes: an unauthenticated `initialize` returns 401 with protected resource metadata (RFC 9728), then authorization server metadata (RFC 8414), then dynamic client registration (RFC 7591). Only OAuth servers with PKCE S256 are accepted; servers without sign-in and API-key servers are not supported yet.
+- The URL must be https without query, fragment or credentials, and its host must resolve only to public addresses. Every later request to the server (authorization, token exchange, tool calls) is checked the same way, and redirects are not followed.
+- Adding the same URL again for the same user returns the same connector (the name derives from project, user and URL). At most 20 per user.
+- A custom connector is visible only to the `external_user_id` that added it: it is not in `GET /v1/connectors` or `GET /v1/tools`, and other users get `connector_not_found` when they create a session with its name.
+- Whether a tool is read-only comes from the server's own annotations; treat it as untrusted. Call arguments are sent to that server.
+- The avatar is a monogram of the name; the server's own icon is not fetched.
+
+Failures return 422 with one of: `invalid_server_url`, `server_unreachable`, `server_not_public`, `not_mcp_server`, `server_auth_unsupported`, `server_registration_unsupported`, `server_registration_failed`; over the limit returns 409 `custom_connector_limit`.
+
+`GET /v1/custom-connectors?external_user_id=user_123`
+
+Returns `{ "data": [ ... ] }` with the fields above, oldest first.
+
+`DELETE /v1/custom-connectors/{name}?external_user_id=user_123`
+
+Revokes and deletes the user's connections to it (upstream revocation is best effort), then its sessions, tool catalog, registered client and the connector itself. Returns `{"name":"mcp_1a2b3c4d5e","removed":true,"revoked":1}`.
+
 ## SDK and the two-tool adapter
 
 Download the TypeScript SDK from the page header and use it on your agent backend. It has no third-party runtime dependencies.
@@ -451,6 +486,7 @@ Other SDK methods: connectors, createSession, getSession, listConnections, getCo
 | 404 connector_not_found | Check the connector name against GET /v1/connectors |
 | 409 reauth_required | Reauthorize the original account |
 | 409 connection_revoked / new_connection_required | Create a new connection session |
+| 422 server_* / not_mcp_server / invalid_server_url | Adding a custom MCP server failed; see "Custom MCP servers" |
 | 410 session_unavailable | Link expired or consumed; generate a new one |
 | 429 rate_limited | Follow Retry-After and reduce polling |
 | mcp_tool_error or another upstream error | Check parameters, resource permissions and upstream status |

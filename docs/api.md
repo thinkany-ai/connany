@@ -411,6 +411,41 @@ curl "$CONNANY_BASE_URL/v1/events?after=0" \
 
 事件只属于当前项目，不包含业务正文或凭证。新事件类型请容错处理。
 
+## 自定义 MCP 服务器
+
+用户可以按 URL 添加目录里没有的远程 MCP 服务器。添加后它就是一个只属于这个用户的连接器，名称形如 `mcp_1a2b3c4d5e`，之后按普通连接器使用：`POST /v1/connectors/{name}/sessions` 创建授权会话，授权完成后列工具、调用工具、断开。
+
+`POST /v1/custom-connectors`
+
+```bash
+curl -X POST "$CONNANY_BASE_URL/v1/custom-connectors" \
+  -H "Authorization: Bearer $CONNANY_API_KEY" -H "Content-Type: application/json" \
+  -d '{"external_user_id":"user_123","url":"https://mcp.example.com/mcp"}'
+```
+
+响应示例（201）：
+
+```json
+{"name":"mcp_1a2b3c4d5e","title":"Example","url":"https://mcp.example.com/mcp","website":"https://mcp.example.com","avatar_url":"https://connect.example.com/connectors/mcp_1a2b3c4d5e/avatar.svg","created_at":"2026-10-09T08:00:00.000Z"}
+```
+
+- Connany 按 MCP 授权规范发现授权方式：未授权的 `initialize` 返回 401 和受保护资源元数据（RFC 9728），再读授权服务器元数据（RFC 8414），然后用动态客户端注册（RFC 7591）注册客户端。只接受支持 PKCE S256 的 OAuth 服务器；不需要登录的服务器和只支持 API Key 的服务器暂不支持。
+- URL 必须是 https，不带查询参数、片段和账号密码，并且域名只能解析到公网地址。之后发往该服务器的每个请求（授权、换 token、工具调用）都重新做这项检查，不跟随重定向。
+- 同一用户重复添加同一 URL 返回同一个连接器（名称由项目、用户和 URL 决定）。每个用户最多 20 个。
+- 自定义连接器只对添加它的 `external_user_id` 可见：不出现在 `GET /v1/connectors` 和 `GET /v1/tools` 中，其他用户用它的名称创建会话会得到 `connector_not_found`。
+- 工具是否只读来自服务器自己的声明，接入方应当把它当作不可信信息；调用参数会发给该服务器。
+- 图标是名称首字母，不抓取对方网站的图标。
+
+失败时返回 422 和以下错误码之一：`invalid_server_url`、`server_unreachable`、`server_not_public`、`not_mcp_server`、`server_auth_unsupported`、`server_registration_unsupported`、`server_registration_failed`；超过数量上限返回 409 `custom_connector_limit`。
+
+`GET /v1/custom-connectors?external_user_id=user_123`
+
+返回 `{ "data": [ ... ] }`，字段同上，按添加时间排序。
+
+`DELETE /v1/custom-connectors/{name}?external_user_id=user_123`
+
+撤销并删除该用户对它的所有连接（上游撤销尽力而为），再删除授权会话、工具目录、注册的客户端和连接器本身。返回 `{"name":"mcp_1a2b3c4d5e","removed":true,"revoked":1}`。
+
 ## SDK 与 Agent 两工具模式
 
 下载页面顶部的 TypeScript SDK，放在 Agent 后端。SDK 无第三方运行依赖。
@@ -451,6 +486,7 @@ SDK 还提供 connectors、createSession、getSession、listConnections、getCon
 | 404 connector_not_found | 连接器名称错误，以 GET /v1/connectors 返回为准 |
 | 409 reauth_required | 引导原账号重新授权 |
 | 409 connection_revoked / new_connection_required | 创建新的连接会话 |
+| 422 server_* / not_mcp_server / invalid_server_url | 添加自定义 MCP 服务器失败，见「自定义 MCP 服务器」 |
 | 410 session_unavailable | 连接链接过期或已使用，重新生成 |
 | 429 rate_limited | 遵循 Retry-After，减少轮询频率 |
 | mcp_tool_error 或其他上游错误 | 检查工具参数、资源权限与上游状态 |
