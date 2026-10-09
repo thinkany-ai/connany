@@ -64,7 +64,7 @@ const { categories, data: connectors } = await connany.connectors({ lang: 'zh-CN
 // [{ name: 'notion', title: 'Notion', description: '页面、数据库与工作区搜索', avatar_url: 'https://…/connectors/notion/avatar.svg', tools_synced_at: … }, …]
 ```
 
-对应 `GET /v1/connectors?lang=zh-CN`，只返回管理员已启用的连接器。`categories` 是这些连接器所属的分类（按推荐顺序），可以用来分组展示；分类名称和连接器描述按 `lang` 返回中文或英文，不传时按 `Accept-Language`，默认英文。用 `title`、`description` 和 `avatar_url` 渲染「连接账号」入口（`avatar_url` 可直接放进 `<img>`）。如果想在用户连接之前介绍某个连接器能做什么，可以读工具目录 `connany.toolCatalog({ connector: 'notion' })`（`GET /v1/tools?connector=notion`）。
+对应 `GET /v1/connectors?lang=zh-CN`，只返回管理员已启用的连接器。`categories` 是这些连接器所属的分类（按推荐顺序），可以用来分组展示；分类名称和连接器描述按 `lang` 返回英文（`en`）、简体中文（`zh-CN`）或香港繁体中文（`zh-HK`），不传时按 `Accept-Language`，默认英文。用 `title`、`description` 和 `avatar_url` 渲染「连接账号」入口（`avatar_url` 可直接放进 `<img>`）。如果想在用户连接之前介绍某个连接器能做什么，可以读工具目录 `connany.toolCatalog({ connector: 'notion' })`（`GET /v1/tools?connector=notion`）。
 
 ### 2.2 创建授权会话，把链接交给用户
 
@@ -295,7 +295,7 @@ SDK 会抛出 `ConnanyError`，带 `status`、`code`、`requestId` 和 `details`
 
 所有连接器的工具都来自上游官方 MCP，名称格式为 `<连接器>.<官方工具名>`，参数以 `input_schema` 为准。
 
-接入方的代码对所有连接器都一样：用 `GET /v1/connectors` 拿到可连接的列表，授权、列出工具、调用工具的接口都不区分连接器。除下面三个之外，Sentry、PostHog、Atlassian、Vercel、Supabase、Neon、Netlify、GitLab、Cloudflare、Prisma、Stripe、PayPal、Square、ClickUp、monday.com、Airtable、Todoist、Miro、Canva、Intercom、Webflow、Wix 也都走各自的官方 MCP，工具名为 `<连接器>.<官方工具名>`。少数平台不提供用户信息，这类连接显示为「<平台> 账号」，`identity.unverified` 为 true，重新授权时无法确认是同一个账号，建议在界面上提示用户。
+接入方的代码对所有连接器都一样：用 `GET /v1/connectors` 拿到可连接的列表，授权、列出工具、调用工具的接口都不区分连接器。除下面三个之外，Sentry、PostHog、Atlassian、Vercel、Supabase、Neon、Netlify、GitLab、Cloudflare、Prisma、Stripe、PayPal、Square、ClickUp、monday.com、Airtable、Todoist、Miro、Canva、Intercom、Webflow、Wix 也都走各自的官方 MCP，工具名为 `<连接器>.<官方工具名>`。Google Search Console 和 Google Analytics 没有官方托管 MCP，工具由 Connany 内置（如 `google_search_console.query_search_analytics`、`google_analytics.run_report`），调用方式相同。少数平台不提供用户信息，这类连接显示为「<平台> 账号」，`identity.unverified` 为 true，重新授权时无法确认是同一个账号，建议在界面上提示用户。
 
 ### Notion
 

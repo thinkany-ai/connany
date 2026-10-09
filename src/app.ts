@@ -19,7 +19,8 @@ import { returnUrlSchema } from './projects.js';
 import { searchTools } from './tool-search.js';
 import { OAuthError, OAuthServer, mcpScope } from './mcp/oauth.js';
 import { McpServer } from './mcp/server.js';
-import { categoryTitles, connectorCatalog, connectorCategories, connector as connectorSpec, isConnectorName, isCustomConnector, locales, pickLocale, type ConnectorDefinition } from './connectors/catalog.js';
+import { categoryTitles, connectorCatalog, connectorCategories, connector as connectorSpec, isConnectorName, isCustomConnector, type ConnectorDefinition } from './connectors/catalog.js';
+import { locales, localize, pickLocale } from './i18n.js';
 
 const userSchema = z.string().min(1).max(200);
 const sessionInput = z.object({ external_user_id: userSchema, return_url: returnUrlSchema.optional() }).strict();
@@ -102,9 +103,9 @@ export function createApp(service: Service) {
     const { lang } = z.object({ lang: z.enum(locales).optional() }).strict().parse(c.req.query());
     const locale = pickLocale(lang, c.req.header('Accept-Language'));
     const enabled = (await service.connectorStore.in(c.get('project').workspace_id).list()).filter(item => item.enabled);
-    const data = enabled.map(item => { const spec = connectorCatalog[item.name] as ConnectorDefinition; return { name: item.name, title: spec.label, category: spec.category, description: spec.description[locale], avatar_url: `${base}/connectors/${item.name}/avatar.svg`, tools_synced_at: item.tools_synced_at }; });
+    const data = enabled.map(item => { const spec = connectorCatalog[item.name] as ConnectorDefinition; return { name: item.name, title: spec.label, category: spec.category, description: localize(spec.description, locale), avatar_url: `${base}/connectors/${item.name}/avatar.svg`, tools_synced_at: item.tools_synced_at }; });
     // Only categories that contain an enabled connector, in display order.
-    const categories = connectorCategories.filter(category => data.some(item => item.category === category)).map(name => ({ name, title: categoryTitles[name][locale] }));
+    const categories = connectorCategories.filter(category => data.some(item => item.category === category)).map(name => ({ name, title: localize(categoryTitles[name], locale) }));
     c.header('Content-Language', locale); c.header('Vary', 'Accept-Language');
     return c.json({ categories, data });
   });

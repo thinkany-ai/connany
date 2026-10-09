@@ -63,7 +63,9 @@ test('connectors list only enabled connectors with localized descriptions, their
  assert.deepEqual(body.categories,[{name:'collaboration',title:'Collaboration'},{name:'development',title:'Code & deploy'}]);
  const zh=await app.request('/v1/connectors?lang=zh-CN');assert.equal(zh.headers.get('Content-Language'),'zh-CN');
  const zhBody=await zh.json() as any;assert.equal(zhBody.data[0].description,'页面、数据库与工作区搜索');assert.equal(zhBody.categories[0].title,'协作与办公');assert.equal(zhBody.data[0].title,'Notion');
- const header=await (await app.request('/v1/connectors',{headers:{'Accept-Language':'zh-TW,zh;q=0.9,en;q=0.8'}})).json() as any;assert.equal(header.categories[1].title,'代码与部署');
+ const header=await (await app.request('/v1/connectors',{headers:{'Accept-Language':'zh-TW,zh;q=0.9,en;q=0.8'}})).json() as any;assert.equal(header.categories[1].title,'程式碼與部署');
+ const hk=await app.request('/v1/connectors?lang=zh-HK');assert.equal(hk.headers.get('Content-Language'),'zh-HK');
+ const hkBody=await hk.json() as any;assert.equal(hkBody.data[0].description,'頁面、數據庫與工作區搜尋');assert.equal(hkBody.categories[0].title,'協作與辦公');
  const explicit=await (await app.request('/v1/connectors?lang=en',{headers:{'Accept-Language':'zh-CN'}})).json() as any;assert.equal(explicit.categories[0].title,'Collaboration');
  assert.equal((await app.request('/v1/connectors?lang=fr')).status,400);
  const avatar=await app.request('/connectors/linear/avatar.svg');

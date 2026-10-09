@@ -197,6 +197,8 @@
       const callTool = (tool,input) => request(`${toolsPath}/${encodeURIComponent(tool)}/call`,{external_user_id:user.value,input});
       const listTools = () => request(`${toolsPath}?${new URLSearchParams({external_user_id:user.value,limit:'5'})}`);
       let result;
+      // REST connectors read real data: the sites or properties the account can see.
+      const probes = {google_search_console:'google_search_console.list_sites',google_analytics:'google_analytics.list_account_summaries'};
       if (connector.value === 'github') {
         githubPanel.replaceChildren();
         const installations = [];
@@ -228,6 +230,9 @@
         const tools = await listTools();
         result = {installations,tools};
         status.textContent = installations.length ? '已获取组织列表，请选择组织试读。管理入口可能需要组织管理员权限。' : '账号已连接，尚未添加仓库。可以点击添加组织 / 仓库，完成后再次试读刷新列表。';
+      } else if (probes[connector.value]) {
+        result = await callTool(probes[connector.value],{});
+        status.textContent = '读取成功。空列表表示当前授权范围内没有可见数据。';
       } else {
         result = await listTools();
         status.textContent = '读取成功。空列表表示当前授权范围内没有可见数据。';

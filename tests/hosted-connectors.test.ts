@@ -15,7 +15,7 @@ test('every hosted MCP connector declares HTTPS endpoints, a resource on its own
   if(spec.auth!=='mcp')continue;
   const mcp=new HostedMcp(fetch,name);
   for(const kind of ['authorize','token','register'] as const)assert.match(mcp.oauthUrl(kind)!,/^https:\/\//,`${name} ${kind}`);
-  if(typeof spec.mcp.resource==='string')assert.equal(new URL(spec.mcp.resource).origin,spec.mcp.origin,name);
+  if(typeof spec.mcp!.resource==='string')assert.equal(new URL(spec.mcp!.resource).origin,spec.mcp!.origin,name);
  }
 });
 
@@ -82,18 +82,27 @@ test('registration failures keep the upstream OAuth error for administrators',as
 test('the SDK names every catalog connector and every connector has a category',async()=>{
  const {readFile}=await import('node:fs/promises');const sdk=await readFile('sdk/client.ts','utf8');
  const union=sdk.match(/export type ConnectorName = ([^;]+);/)![1];
- assert.deepEqual([...union.matchAll(/'([a-z]+)'/g)].map(m=>m[1]).sort(),[...connectorNames].sort());
+ assert.deepEqual([...union.matchAll(/'([a-z_]+)'/g)].map(m=>m[1]).sort(),[...connectorNames].sort());
  const {connectorCategories}=await import('../src/connectors/catalog.js');
  for(const name of connectorNames)assert((connectorCategories as readonly string[]).includes(connector(name).category),name);
 });
 
 test('connector descriptions and category titles exist in every supported language',async()=>{
- const {categoryTitles,connectorCategories,locales,pickLocale}=await import('../src/connectors/catalog.js');
+ const {categoryTitles,connectorCategories}=await import('../src/connectors/catalog.js');
+ const {locales,localize,pickLocale}=await import('../src/i18n.js');
  for(const locale of locales){
-  for(const name of connectorNames)assert(connector(name).description[locale]?.trim(),`${name} ${locale}`);
-  for(const category of connectorCategories)assert(categoryTitles[category][locale]?.trim(),`${category} ${locale}`);
+  for(const name of connectorNames)assert(localize(connector(name).description,locale).trim(),`${name} ${locale}`);
+  for(const category of connectorCategories)assert(localize(categoryTitles[category],locale).trim(),`${category} ${locale}`);
  }
  assert.equal(pickLocale(undefined,'fr-FR,zh-CN;q=0.8'),'zh-CN');assert.equal(pickLocale('en','zh-CN'),'en');assert.equal(pickLocale(undefined,undefined),'en');
+});
+
+test('locale negotiation maps region and script subtags to the closest supported locale',async()=>{
+ const {pickLocale}=await import('../src/i18n.js');
+ for(const tag of ['zh-HK','zh-hk','zh-MO','zh-TW','zh-Hant','zh-Hant-CN'])assert.equal(pickLocale(tag),'zh-HK',tag);
+ for(const tag of ['zh','zh-CN','zh-SG','zh-Hans','zh-Hans-HK'])assert.equal(pickLocale(tag),'zh-CN',tag);
+ assert.equal(pickLocale(undefined,'en;q=0.5,zh-HK'),'zh-HK');assert.equal(pickLocale(undefined,'zh-HK;q=0,en'),'en');
+ assert.equal(pickLocale(undefined,'*,fr;q=0.9'),'en');assert.equal(pickLocale('not a tag','zh-TW'),'zh-HK');
 });
 
 test('connector MCP headers are sent on every request and large tool catalogs are accepted',async()=>{

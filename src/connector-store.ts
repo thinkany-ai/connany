@@ -6,7 +6,7 @@ import { connector as connectorSpec } from './connectors/catalog.js';
 import { Vault, id } from './crypto.js';
 import { transaction } from './db.js';
 import { AppError } from './errors.js';
-import { ConnectorRuntime } from './connectors/index.js';
+import { ConnectorRuntime, restToolCatalog } from './connectors/index.js';
 import { defaultWorkspaceId } from './workspaces.js';
 
 export const connectorAppInput = z.object({
@@ -18,6 +18,8 @@ export interface ConnectorView {
   has_secret: boolean; github_app_slug: string; callback_url: string; updated_at: Date | null;
   /** Cached tool catalog size and freshness; null until an administrator sync or user authorization. */
   tool_count: number; tools_synced_at: Date | null;
+  /** The catalog ships with Connany (REST connectors) and needs no sync. */
+  built_in_tools?: boolean;
 }
 /** A tool definition in the connector catalog. Never contains user data. */
 export interface ToolDefinition { name: string; connector: AnyConnector; description: string; read_only: boolean; required_permissions: string[]; input_schema: Record<string, unknown> }
@@ -55,7 +57,8 @@ export class ConnectorStore {
     return connectorNames.map(name => {
       const r = rows.find(r => r.name === name);
       const catalog = catalogs.find(c => c.connector === name);
-      const tools = { tool_count: catalog?.tool_count ?? 0, tools_synced_at: catalog?.synced_at ?? null };
+      const builtIn = connectorSpec(name).rest ? restToolCatalog(name).length : undefined;
+      const tools = { tool_count: builtIn ?? catalog?.tool_count ?? 0, tools_synced_at: catalog?.synced_at ?? null, ...(builtIn !== undefined ? { built_in_tools: true } : {}) };
       if (connectorSpec(name).auth === 'mcp' && r?.settings?.transport !== 'mcp') return {name,configured:false,enabled:false,client_id:'',has_secret:false,github_app_slug:'',callback_url:this.base.callback(name),updated_at:null,...tools};
       const slug = r?.settings?.github_app_slug || '';
       return { name, configured: !!r?.id, enabled: !!r?.id && r.enabled, client_id: r?.client_id || '', has_secret: !!r?.id,
@@ -63,6 +66,8 @@ export class ConnectorStore {
     });
   }
   async saveTools(name: AnyConnector, tools: ToolDefinition[], db: pg.Pool | pg.PoolClient = this.pool) {
+    // Built-in REST catalogs ship with the code and are never cached.
+    if (connectorSpec(name).rest) return;
     await db.query(`INSERT INTO connector_tools(workspace_id,connector,tools,synced_at) VALUES($1,$2,$3,now())
       ON CONFLICT(workspace_id,connector) DO UPDATE SET tools=EXCLUDED.tools,synced_at=now()`, [this.workspaceId, name, JSON.stringify(tools)]);
   }
@@ -70,21 +75,23 @@ export class ConnectorStore {
   async tools(): Promise<ToolDefinition[]> {
     const { rows } = await this.pool.query(`SELECT t.tools FROM connector_tools t JOIN connectors s ON s.workspace_id=t.workspace_id AND s.name=t.connector
       WHERE t.workspace_id=$1 AND s.enabled=true AND s.active_app_id IS NOT NULL AND t.connector NOT LIKE 'mcp\\_%' ORDER BY t.connector`, [this.workspaceId]);
-    return rows.flatMap(row => row.tools);
+    const enabled = (await this.pool.query("SELECT name FROM connectors WHERE workspace_id=$1 AND enabled=true AND active_app_id IS NOT NULL AND name NOT LIKE 'mcp\\_%'", [this.workspaceId])).rows.map(r => r.name as ConnectorName);
+    return [...rows.flatMap(row => row.tools), ...enabled.filter(name => connectorSpec(name).rest).flatMap(name => restToolCatalog(name))];
   }
   /** Cached catalog of one connector regardless of whether it accepts new connections; null if never synced. */
   async catalog(name: AnyConnector): Promise<ToolDefinition[] | null> {
+    if (connectorSpec(name).rest) return restToolCatalog(name);
     const { rows } = await this.pool.query('SELECT tools FROM connector_tools WHERE workspace_id=$1 AND connector=$2', [this.workspaceId, name]);
     return rows[0]?.tools ?? null;
   }
   async saveMcp(name: ConnectorName, enabled: boolean, adminId: string) {
-    if (connectorSpec(name).auth !== 'mcp') throw new AppError('github_app_required', 'Configure a GitHub App for OAuth.');
+    if (connectorSpec(name).auth !== 'mcp') throw new AppError('oauth_client_required', 'Configure an OAuth client for this connector.');
     await transaction(this.pool, async db => {
       await db.query('SELECT pg_advisory_xact_lock(804217332)');
       const existing = (await db.query("SELECT a.* FROM connectors s JOIN connector_apps a ON a.id=s.active_app_id WHERE s.workspace_id=$1 AND s.name=$2",[this.workspaceId,name])).rows[0];
       // Register again when the callback or the requested client authentication changed (e.g. a
       // connector now needs a confidential client). Connections keep the client they were issued by.
-      const requested = connectorSpec(name).mcp.clientAuth || 'none';
+      const requested = connectorSpec(name).mcp!.clientAuth || 'none';
       let appId = existing?.settings?.transport === 'mcp' && existing.settings.callback_url === this.base.callback(name)
         && (existing.settings.requested_auth ?? existing.settings.token_endpoint_auth_method ?? 'none') === requested ? existing.id : null;
       // Pausing never registers; it keeps whatever client is active.
@@ -99,7 +106,7 @@ export class ConnectorStore {
     });
   }
   async save(name: ConnectorName, input: z.infer<typeof connectorAppInput>, adminId: string) {
-    if (connectorSpec(name).auth !== 'github_app') throw new AppError(`use_${name}_mcp`, 'Use official MCP registration.');
+    if (connectorSpec(name).auth === 'mcp') throw new AppError(`use_${name}_mcp`, 'Use official MCP registration.');
     if (name === 'github' && !/^[a-zA-Z0-9-]+$/.test(input.github_app_slug)) throw new AppError('invalid_slug', '请填写 GitHub App slug。');
     await transaction(this.pool, async db => {
       await db.query('SELECT pg_advisory_xact_lock(804217332)');

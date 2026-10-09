@@ -6,7 +6,7 @@ export interface McpClient { clientId: string; clientSecret: string; authMethod:
 
 export class HostedMcp {
   constructor(private fetcher: Fetcher = fetch, private connector: AnyConnector = 'notion') {}
-  private get spec() { return definition(this.connector).mcp; }
+  private get spec() { return definition(this.connector).mcp!; }
   private get origin() { return this.spec.origin; }
   private get endpoint() { return this.spec.endpoint || '/mcp'; }
   /** OAuth endpoint: explicit from the catalog, or the legacy origin + path layout. */
@@ -17,7 +17,7 @@ export class HostedMcp {
   }
   /** RFC 8707 resource indicator, when the connector requires one. */
   get resource() { return typeof this.spec.resource === 'string' ? this.spec.resource : this.spec.resource ? this.origin + this.endpoint : undefined; }
-  private assertRegistrable() { if (definition(this.connector).auth !== 'mcp') throw new AppError('github_app_required','Configure a GitHub App for OAuth.'); }
+  private assertRegistrable() { if (definition(this.connector).auth !== 'mcp') throw new AppError('oauth_client_required','Configure an OAuth client for this connector.'); }
   private async request(path: string, init: RequestInit) {
     let response: Response;
     try { response = await this.fetcher(/^https:\/\//.test(path) ? path : this.origin + path, { ...init, redirect: 'error', signal: AbortSignal.timeout(45000) }); }

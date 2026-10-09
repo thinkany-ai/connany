@@ -72,6 +72,36 @@ GitHub App 安装授权决定仓库范围；用户 OAuth 决定操作主体。Co
 
 [官方文档](https://linear.app/docs/mcp)
 
+## Google Search Console / Google Analytics
+
+Google 不提供 Search Console 和 Analytics 的托管 MCP，也不支持动态客户端注册。这两个连接器由管理员在 Google Cloud 创建一个 OAuth 客户端，Connany 用用户的 token 直接调用 Google REST API，工具目录内置在 Connany 里，无需「同步工具目录」。两个连接器可以共用同一个 OAuth 客户端。
+
+1. 在 [Google Cloud 控制台](https://console.cloud.google.com/) 选择或新建项目，在「API 和服务 → 库」中启用：
+   - Search Console：**Google Search Console API**
+   - Analytics：**Google Analytics Data API** 和 **Google Analytics Admin API**
+2. 配置 OAuth 同意屏幕（Google Auth Platform）：填写应用名称、支持邮箱和授权域名，在「数据访问」中添加 `openid`、`email`、`https://www.googleapis.com/auth/webmasters.readonly`、`https://www.googleapis.com/auth/analytics.readonly`。
+3. 在「凭据」创建 **Web 应用** 类型的 OAuth 客户端，「已获授权的重定向 URI」加入：
+   - `https://connect.example.com/oauth/google_search_console/callback`
+   - `https://connect.example.com/oauth/google_analytics/callback`
+4. 在管理后台「连接器 → Google Search Console / Google Analytics → 配置」填写 Client ID 和 Client Secret 并保存，然后在「连接测试」发起授权，试读数据会列出账号可访问的站点 / GA4 媒体资源。
+
+发布状态：
+
+- **测试中（Testing）**：只有加入「测试用户」的 Google 账号（最多 100 个）能授权，且 refresh token **7 天后失效**，用户需要重新授权。适合自测。
+- **正式版（In production）**：两个 scope 都是 Google 的敏感范围，对外开放前需要通过 Google 的应用验证（品牌信息、隐私政策、用途说明和演示视频），不需要安全评估。未验证时用户会看到「Google 尚未验证此应用」的提示。
+- **内部（Internal）**：仅限 Google Workspace 组织内的账号，无需验证，refresh token 不会 7 天过期。
+
+工具（全部只读）：
+
+| 连接器 | 工具 |
+|---|---|
+| Google Search Console | `list_sites`、`query_search_analytics`（点击、展示、CTR、排名，可按查询词 / 页面 / 国家 / 设备 / 日期分组和过滤）、`list_sitemaps`、`inspect_url`（索引状态） |
+| Google Analytics | `list_account_summaries`、`get_property`、`get_metadata`（可用维度与指标，含自定义）、`run_report`、`run_realtime_report` |
+
+工具名为 `<连接器>.<工具>`，例如 `google_analytics.run_report`。返回结果整理为按维度、指标命名的行，数值指标转为数字；单次最多 1000 行，用 `start_row` / `offset` 翻页。Google 返回的错误说明（如 API 未启用、无权访问该媒体资源、指标名错误）会放在错误的 `details.upstream_message` 中，MCP 调用会直接展示给 agent。
+
+授权时请求 `access_type=offline` 和 `prompt=consent`，保证每次授权都拿到 refresh token。账号以 Google userinfo 的 `sub` 识别，显示为邮箱。断开连接会调用 `https://oauth2.googleapis.com/revoke` 撤销 refresh token。
+
 ## 其他官方托管 MCP 连接器
 
 以下连接器和 Notion、Linear 一样走官方 MCP 授权：管理员在「连接器」点启用，Connany 自动完成 OAuth 客户端注册（动态客户端注册，RFC 7591），然后点「同步工具目录」用自己的账号授权一次。不需要去各平台申请应用或填写凭证。
@@ -110,7 +140,12 @@ curl -s https://mcp.example.com/.well-known/oauth-protected-resource/mcp
 curl -s https://<授权服务器>/.well-known/oauth-authorization-server
 ```
 
-后台「连接器」、连接路由、工具校验、工具列表会自动出现新连接器，无需修改数据库。需要自定义 OAuth 的连接器（如 GitHub App）仍在 `ConnectorRuntime`（`src/connectors/index.ts`）中单独实现。
+没有托管 MCP 或不支持动态注册的服务（如 Google）使用 `auth: 'oauth'`：
+
+- `oauth`：`authorize`、`token`，可选 `revoke`（RFC 7009）、`userinfo`（OIDC，用 `sub` 或 `id` 识别账号）、`scope`、`authorizeParams`，以及后台配置弹框中的 `console`（创建客户端的链接和说明）。管理员在后台填写 Client ID / Secret。
+- `rest`：Connany 自己实现的工具，参考 `src/connectors/google.ts`：每个工具有 zod 参数、请求构造和可选的结果整理。工具名用 `<连接器>.<小写下划线>`，与 MCP 工具名规则一致。工具目录随代码发布，不写入 `connector_tools`。
+
+后台「连接器」、连接路由、工具校验、工具列表会自动出现新连接器，无需修改数据库。GitHub App 的安装流程仍在 `ConnectorRuntime`（`src/connectors/index.ts`）中单独实现。
 
 升级到此版本需运行一次 `pnpm db:migrate`（`005_provider_catalog.sql` 移除数据库中写死的连接器名单约束）。
 

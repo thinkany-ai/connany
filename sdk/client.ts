@@ -1,7 +1,7 @@
 /** Server-side SDK. Do not bundle the project key into a browser, mobile app or LLM prompt. */
 /** Groups connectors for display: collaboration, development, data, analytics, payments, design. */
 export type ConnectorCategory = 'collaboration' | 'development' | 'data' | 'analytics' | 'payments' | 'design';
-export type ConnectorName = 'notion' | 'github' | 'linear' | 'sentry' | 'posthog' | 'atlassian' | 'vercel' | 'supabase' | 'neon' | 'netlify' | 'gitlab' | 'cloudflare' | 'prisma' | 'stripe' | 'paypal' | 'square' | 'clickup' | 'monday' | 'airtable' | 'todoist' | 'miro' | 'canva' | 'intercom' | 'webflow' | 'wix';
+export type ConnectorName = 'notion' | 'github' | 'linear' | 'sentry' | 'posthog' | 'atlassian' | 'vercel' | 'supabase' | 'neon' | 'netlify' | 'gitlab' | 'cloudflare' | 'prisma' | 'stripe' | 'paypal' | 'square' | 'clickup' | 'monday' | 'airtable' | 'todoist' | 'miro' | 'canva' | 'intercom' | 'webflow' | 'wix' | 'google_search_console' | 'google_analytics';
 /** A remote MCP server one user added by URL; used as a connector by `name`. */
 export type CustomConnectorName = `mcp_${string}`;
 export interface CustomConnector { name: CustomConnectorName; title: string; url: string; website: string; avatar_url: string; created_at: string }
@@ -40,7 +40,7 @@ export class Connany {
     return result as T;
   }
   /** Enabled connectors and their categories. Descriptions and category titles follow `lang` (default English). */
-  connectors(options: { lang?: 'en' | 'zh-CN' } = {}) {
+  connectors(options: { lang?: 'en' | 'zh-CN' | 'zh-HK' } = {}) {
     return this.request<{ categories: { name: ConnectorCategory; title: string }[]; data: { name: ConnectorName; title: string; category: ConnectorCategory; description: string; avatar_url: string; tools_synced_at: string | null }[] }>(`/v1/connectors${options.lang ? `?${new URLSearchParams({ lang: options.lang })}` : ''}`);
   }
   /** Tools the user can use now through an authorized connection. Use this in agent conversations. */

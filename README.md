@@ -50,14 +50,14 @@ To use an existing database, set `DATABASE_URL` in `.env` and skip the Docker st
 | Collaboration | [Notion](https://www.notion.com) · [Linear](https://linear.app) · [Atlassian](https://www.atlassian.com) (Jira, Confluence) · [ClickUp](https://clickup.com) · [monday.com](https://monday.com) · [Airtable](https://airtable.com) · [Todoist](https://todoist.com) · [Intercom](https://www.intercom.com) |
 | Code & deploy | [GitHub](https://github.com) · [GitLab](https://gitlab.com) · [Vercel](https://vercel.com) · [Netlify](https://www.netlify.com) · [Cloudflare](https://www.cloudflare.com) |
 | Databases | [Supabase](https://supabase.com) · [Neon](https://neon.com) · [Prisma](https://www.prisma.io) |
-| Monitoring & analytics | [Sentry](https://sentry.io) · [PostHog](https://posthog.com) |
+| Monitoring & analytics | [Sentry](https://sentry.io) · [PostHog](https://posthog.com) · [Google Search Console](https://search.google.com/search-console) · [Google Analytics](https://analytics.google.com) |
 | Payments | [Stripe](https://stripe.com) · [PayPal](https://www.paypal.com) · [Square](https://squareup.com) |
 | Design & websites | [Canva](https://www.canva.com) · [Miro](https://miro.com) · [Webflow](https://webflow.com) · [Wix](https://www.wix.com) |
 
 - **Hosted MCP connectors (24):** click **Enable** in the console. Connany registers an OAuth client with the provider (RFC 7591), using a public client with PKCE or a confidential client as the provider requires.
 - **GitHub:** create a GitHub App and enter its Client ID, Client Secret and App slug in the console. Users also install the App and choose repositories.
 
-The list is also available to agents through `GET /v1/connectors` (enabled connectors with localized categories and descriptions, `lang=en|zh-CN`).
+The list is also available to agents through `GET /v1/connectors` (enabled connectors with localized categories and descriptions, `lang=en|zh-CN|zh-HK`).
 
 After enabling a connector, click **Sync tool catalog** on its card once: upstream MCP servers list tools only to signed-in users, so you authorize with your own account and Connany keeps only the tool definitions. Users must still authorize their own accounts. GitHub repository access also requires installing the App and selecting repositories. See the [connector setup guide (Chinese)](docs/connector-setup.md).
 

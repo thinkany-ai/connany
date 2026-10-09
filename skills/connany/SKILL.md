@@ -1,6 +1,6 @@
 ---
 name: connany
-description: Use the user's own accounts in third-party services (Notion, Linear, GitHub, GitLab, Atlassian, Stripe, PayPal, Square, PostHog, Sentry, Vercel, Supabase, Airtable, Todoist, Canva, Miro and more) through Connany. Use when the user asks to look up, summarize or change data in one of these services, e.g. "what's in my Linear this week", "how many users did PostHog record yesterday", "create a Notion page".
+description: Use the user's own accounts in third-party services (Notion, Linear, GitHub, GitLab, Atlassian, Stripe, PayPal, Square, PostHog, Sentry, Vercel, Supabase, Airtable, Todoist, Canva, Miro, Google Search Console, Google Analytics and more) through Connany. Use when the user asks to look up, summarize or change data in one of these services, e.g. "what's in my Linear this week", "how many users did PostHog record yesterday", "top search queries in Search Console last week", "create a Notion page".
 ---
 
 # Connany

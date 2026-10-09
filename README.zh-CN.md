@@ -51,14 +51,14 @@ npm run dev   # 或：make dev
 | 协作与办公 | [Notion](https://www.notion.com) · [Linear](https://linear.app) · [Atlassian](https://www.atlassian.com)（Jira、Confluence）· [ClickUp](https://clickup.com) · [monday.com](https://monday.com) · [Airtable](https://airtable.com) · [Todoist](https://todoist.com) · [Intercom](https://www.intercom.com) |
 | 代码与部署 | [GitHub](https://github.com) · [GitLab](https://gitlab.com) · [Vercel](https://vercel.com) · [Netlify](https://www.netlify.com) · [Cloudflare](https://www.cloudflare.com) |
 | 数据库 | [Supabase](https://supabase.com) · [Neon](https://neon.com) · [Prisma](https://www.prisma.io) |
-| 监控与分析 | [Sentry](https://sentry.io) · [PostHog](https://posthog.com) |
+| 监控与分析 | [Sentry](https://sentry.io) · [PostHog](https://posthog.com) · [Google Search Console](https://search.google.com/search-console) · [Google Analytics](https://analytics.google.com) |
 | 支付 | [Stripe](https://stripe.com) · [PayPal](https://www.paypal.com) · [Square](https://squareup.com) |
 | 设计与建站 | [Canva](https://www.canva.com) · [Miro](https://miro.com) · [Webflow](https://webflow.com) · [Wix](https://www.wix.com) |
 
 - **托管 MCP 连接器（24 个）：** 后台点「启用」即可。Connany 按平台要求自动注册 OAuth 客户端（RFC 7591），使用公开客户端 + PKCE 或带密钥的机密客户端。
 - **GitHub：** 创建 GitHub App，在后台填写 Client ID、Client Secret 和 App slug；用户还需安装 App 并选择仓库。
 
-Agent 也可以通过 `GET /v1/connectors` 获取已启用的连接器，包含多语言的分类和说明（`lang=en|zh-CN`）。
+Agent 也可以通过 `GET /v1/connectors` 获取已启用的连接器，包含多语言的分类和说明（`lang=en|zh-CN|zh-HK`）。
 
 启用连接器后，在卡片上点一次「同步工具目录」：上游 MCP 只向已登录用户提供工具列表，所以用你自己的账号授权一次，Connany 只保存工具定义。用户仍需授权自己的账号；GitHub 仓库访问还需要安装 App 并选择仓库。详见 [连接器配置](docs/connector-setup.md)。
 
