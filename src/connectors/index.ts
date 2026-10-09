@@ -25,9 +25,9 @@ export function restToolCatalog() { return Object.entries(restTools).map(([name,
 export class ConnectorRuntime {
   constructor(public config: Config, private fetcher: Fetcher = fetch, private lookup: HostLookup = systemLookup) {}
   /** Custom servers are unvetted: their traffic may only reach public addresses. */
-  mcp(connector: AnyConnector) { return new HostedMcp(isCustomConnector(connector) ? guardFetch(this.fetcher, this.lookup) : this.fetcher,connector); }
+  mcp(connector: AnyConnector) { return new HostedMcp(isCustomConnector(connector) ? guardFetch(this.fetcher, this.lookup, this.config.customMcpAllowFakeIp) : this.fetcher,connector); }
   /** The base fetcher and host lookup, for discovering a custom server. */
-  network() { return { fetcher: this.fetcher, lookup: this.lookup }; }
+  network() { return { fetcher: this.fetcher, lookup: this.lookup, allowFakeIp: !!this.config.customMcpAllowFakeIp }; }
   withConfig(config: Config) { return new ConnectorRuntime(config, this.fetcher, this.lookup); }
   enabled(connector: AnyConnector) { return !!this.config.connectors[connector]?.clientId; }
   private client(connector: AnyConnector) {

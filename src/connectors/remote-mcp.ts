@@ -31,10 +31,14 @@ function publicV4(ip: string) {
   if (a === 203 && b === 0 && c === 113) return false;
   return true;
 }
-/** Whether an address is reachable on the public internet (not loopback, private, link local, …). */
-export function isPublicAddress(ip: string): boolean {
+/**
+ * Whether an address is reachable on the public internet (not loopback, private, link local, …).
+ * `allowFakeIp`: also accept 198.18.0.0/15, which a local proxy in fake-IP mode answers every
+ * name with. Development only (CUSTOM_MCP_ALLOW_FAKE_IP); never on a server.
+ */
+export function isPublicAddress(ip: string, allowFakeIp = false): boolean {
   const family = isIP(ip);
-  if (family === 4) return publicV4(ip);
+  if (family === 4) return publicV4(ip) || (allowFakeIp && /^198\.(18|19)\./.test(ip));
   if (family !== 6) return false;
   const lower = ip.toLowerCase();
   // IPv4-mapped (::ffff:a.b.c.d) and NAT64 (64:ff9b::a.b.c.d) addresses carry an IPv4 target.
@@ -51,7 +55,7 @@ export function isPublicAddress(ip: string): boolean {
 }
 
 /** Validate a URL for a remote MCP request and check where its host resolves. */
-export async function assertPublicUrl(raw: string, lookup: HostLookup): Promise<URL> {
+export async function assertPublicUrl(raw: string, lookup: HostLookup, allowFakeIp = false): Promise<URL> {
   let url: URL;
   try { url = new URL(raw); } catch { throw new AppError('invalid_server_url', 'Give the full https:// URL of the MCP server.'); }
   if (url.protocol !== 'https:') throw new AppError('invalid_server_url', 'The MCP server must use https://.');
@@ -59,7 +63,7 @@ export async function assertPublicUrl(raw: string, lookup: HostLookup): Promise<
   const host = url.hostname.replace(/^\[|\]$/g, '');
   const addresses = isIP(host) ? [host] : (await lookup(host).catch(() => [])).map(a => a.address);
   if (!addresses.length) throw new AppError('server_unreachable', 'The MCP server host could not be resolved.', 422);
-  if (!addresses.every(isPublicAddress)) throw new AppError('server_not_public', 'The MCP server must be on the public internet.', 422);
+  if (!addresses.every(a => isPublicAddress(a, allowFakeIp))) throw new AppError('server_not_public', 'The MCP server must be on the public internet.', 422);
   return url;
 }
 
@@ -68,9 +72,9 @@ export async function assertPublicUrl(raw: string, lookup: HostLookup): Promise<
  * starts; redirects are never followed (callers already pass `redirect: 'error'`, and this
  * enforces it).
  */
-export function guardFetch(fetcher: Fetcher, lookup: HostLookup = systemLookup): Fetcher {
+export function guardFetch(fetcher: Fetcher, lookup: HostLookup = systemLookup, allowFakeIp = false): Fetcher {
   return (async (input: Parameters<Fetcher>[0], init?: Parameters<Fetcher>[1]) => {
-    await assertPublicUrl(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url, lookup);
+    await assertPublicUrl(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url, lookup, allowFakeIp);
     return fetcher(input, { ...init, redirect: 'error' });
   }) as Fetcher;
 }
@@ -112,8 +116,8 @@ function displayName(value: unknown, fallback: string): string {
 }
 
 /** Normalize what a user typed into the canonical server URL (same check as every later request). */
-export async function normalizeServerUrl(raw: string, lookup: HostLookup): Promise<URL> {
-  const url = await assertPublicUrl(raw.trim(), lookup);
+export async function normalizeServerUrl(raw: string, lookup: HostLookup, allowFakeIp = false): Promise<URL> {
+  const url = await assertPublicUrl(raw.trim(), lookup, allowFakeIp);
   if (url.search || url.hash) throw new AppError('invalid_server_url', 'Use the MCP server URL without query or fragment.');
   if (url.href.length > 500) throw new AppError('invalid_server_url', 'The URL is too long.');
   url.pathname = url.pathname.replace(/\/+$/, '') || '/';
@@ -124,9 +128,9 @@ export async function normalizeServerUrl(raw: string, lookup: HostLookup): Promi
  * Find how to authorize against a remote MCP server. Throws a closed AppError code when the
  * server is not reachable, not an MCP server, or does not support the flow Connany implements.
  */
-export async function discoverServer(raw: string, baseFetcher: Fetcher, lookup: HostLookup = systemLookup): Promise<DiscoveredServer> {
-  const fetcher = guardFetch(baseFetcher, lookup);
-  const url = await normalizeServerUrl(raw, lookup);
+export async function discoverServer(raw: string, baseFetcher: Fetcher, lookup: HostLookup = systemLookup, allowFakeIp = false): Promise<DiscoveredServer> {
+  const fetcher = guardFetch(baseFetcher, lookup, allowFakeIp);
+  const url = await normalizeServerUrl(raw, lookup, allowFakeIp);
   const endpoint = url.origin + (url.pathname === '/' ? '' : url.pathname);
 
   // 1. An unauthenticated initialize: an OAuth-protected server answers 401 with its metadata URL.

@@ -8,6 +8,8 @@ export interface Config {
   /** Built-in connectors always have an entry; a custom connector's client is filled in by ConnectorStore.resolve. */
   connectors: Record<ConnectorName, ConnectorClient> & Partial<Record<AnyConnector, ConnectorClient>>;
   githubAppSlug: string; githubVersion: string; notionVersion: string; linearScopes: string;
+  /** Development behind a fake-IP proxy: accept 198.18.0.0/15 for custom MCP servers. */
+  customMcpAllowFakeIp?: boolean;
 }
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const databaseUrl = z.string().min(1).parse(env.DATABASE_URL);
@@ -30,5 +32,5 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   return { databaseUrl, publicBaseUrl: base.origin, encryptionKey,
     port: z.coerce.number().int().min(1).max(65535).parse(env.PORT || 3000), connectors, githubAppSlug,
     githubVersion: env.GITHUB_API_VERSION || '2026-03-10', notionVersion: env.NOTION_API_VERSION || '2026-03-11',
-    linearScopes: env.LINEAR_SCOPES || 'read' };
+    linearScopes: env.LINEAR_SCOPES || 'read', customMcpAllowFakeIp: env.CUSTOM_MCP_ALLOW_FAKE_IP === 'true' };
 }

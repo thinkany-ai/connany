@@ -15,6 +15,13 @@ test('only public addresses pass: private, loopback, link-local, mapped and NAT6
  for(const ip of ['10.0.0.1','127.0.0.1','169.254.169.254','172.16.5.4','192.168.1.1','100.64.0.1','0.0.0.0','224.0.0.1','::1','::','fc00::1','fd12::1','fe80::1','ff02::1','::ffff:127.0.0.1','::ffff:7f00:1','64:ff9b::10.0.0.1','2001:db8::1','not-an-ip'])assert(!isPublicAddress(ip),ip);
 });
 
+test('the fake-IP range passes only with the development switch',async()=>{
+ const fakeIp:HostLookup=async()=>[{address:'198.18.8.116',family:4}];
+ assert(!isPublicAddress('198.18.8.116'));assert(isPublicAddress('198.18.8.116',true));assert(!isPublicAddress('10.0.0.1',true));
+ assert.equal(await code(assertPublicUrl('https://feeds.example/mcp',fakeIp)),'server_not_public');
+ assert.equal((await assertPublicUrl('https://feeds.example/mcp',fakeIp,true)).host,'feeds.example');
+});
+
 test('server URLs must be https, credential-free and resolve publicly; the guard checks every request and never follows redirects',async()=>{
  assert.equal(await code(assertPublicUrl('http://feeds.example/mcp',publicLookup)),'invalid_server_url');
  assert.equal(await code(assertPublicUrl('https://u:p@feeds.example/mcp',publicLookup)),'invalid_server_url');

@@ -70,7 +70,7 @@ export class CustomConnectors {
    */
   async add(project: { id: string; workspace_id: string }, user: string, url: string): Promise<CustomConnectorRow> {
     const network = this.runtime.network();
-    const server = await discoverServer(url, network.fetcher, network.lookup);
+    const server = await discoverServer(url, network.fetcher, network.lookup, network.allowFakeIp);
     const name = `mcp_${hash(`${project.id}\n${user}\n${server.url}`).slice(0, 10)}` as CustomConnectorName;
     const existing = (await this.pool.query<CustomConnectorRow>('SELECT * FROM custom_connectors WHERE name=$1', [name])).rows[0];
     if (existing) { customDefinitions.set(name, definitionOf(existing)); return existing; }
