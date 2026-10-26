@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { githubRestTools } from './github-rest.js';
 import { googleTools } from './google.js';
 import { googleWorkspaceTools } from './google-workspace.js';
+import { microsoft365Tools } from './microsoft-365.js';
 import { outlookTools } from './outlook.js';
 import { gmailTools } from './gmail.js';
 import { zohoMailTools } from './zoho-mail.js';
@@ -23,8 +24,9 @@ export interface Identity { account_id: string; account_name: string; workspace_
 export type Fetcher = typeof fetch;
 const pagination = { limit: z.number().int().min(1).max(100).default(20), cursor: z.string().max(500).optional() };
 /** Tools Connany implements against REST APIs, for connectors with `rest` in the catalog. */
-const restOperations: Record<string, RestOperation> = { ...googleTools, ...gmailTools, ...zohoMailTools, ...googleWorkspaceTools, ...outlookTools };
+const restOperations: Record<string, RestOperation> = { ...googleTools, ...gmailTools, ...zohoMailTools, ...googleWorkspaceTools, ...outlookTools, ...microsoft365Tools };
 export const restTools = {
+  ...microsoft365Tools,
   ...googleWorkspaceTools,
   ...outlookTools,
   ...githubRestTools,
@@ -64,7 +66,7 @@ export class ConnectorRuntime {
     const scope = oauth ? oauth.scope : spec.mcp!.scope;
     if (scope) url.searchParams.set('scope', scope);
     for (const [key, value] of Object.entries((oauth ?? spec.mcp!).authorizeParams || {})) url.searchParams.set(key, value);
-    const resource = oauth ? undefined : this.mcp(connector).resource;
+    const resource = oauth ? oauth.resource : this.mcp(connector).resource;
     if (resource) url.searchParams.set('resource', resource);
     return url.toString();
   }
@@ -83,7 +85,7 @@ export class ConnectorRuntime {
     catch { throw new UpstreamError('upstream_unavailable', 502); }
     let body: any;
     try { body = response.status === 204 ? {} : await response.json(); } catch { body = {}; }
-    if (!response.ok || body.error) {
+    if (!response.ok || body.error || body.ok === false) {
       // Zoho answers a revoked or unknown refresh token with invalid_code.
       const authError = tokenRequest && ['invalid_grant', 'bad_refresh_token', 'expired_token', 'invalid_refresh_token', 'invalid_code'].includes(body.error);
       const status = response.status === 429 ? 429 : (!tokenRequest && response.status === 401) || authError ? 401 : 502;
@@ -97,12 +99,12 @@ export class ConnectorRuntime {
   private async token(connector: AnyConnector, fields: Record<string, string>, old?: Credentials, server = old?.server) {
     const app = this.client(connector);
     const spec = definition(connector);
-    const raw = spec.auth === 'mcp' ? await this.mcp(connector).token(this.mcpClient(connector), fields) : await this.request(this.regional(connector, spec.oauth!.token, server), { method: 'POST', headers: { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({...fields,client_id:app.clientId,client_secret:app.clientSecret}).toString() }, true);
+    const raw = spec.auth === 'mcp' ? await this.mcp(connector).token(this.mcpClient(connector), fields) : await this.request(this.regional(connector, spec.oauth!.token, server), { method: 'POST', headers: { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({...fields,...(spec.oauth?.resource ? {resource:spec.oauth.resource} : {}),client_id:app.clientId,client_secret:app.clientSecret}).toString() }, true);
     if (typeof raw.access_token !== 'string' || !raw.access_token) throw new UpstreamError('invalid_token_response');
     const expires = (seconds: unknown) => typeof seconds === 'number' && seconds > 0 ? new Date(Date.now() + seconds * 1000).toISOString() : undefined;
     const credential: Credentials = { accessToken: raw.access_token, refreshToken: raw.refresh_token || old?.refreshToken,
       expiresAt: expires(raw.expires_in), refreshExpiresAt: expires(raw.refresh_token_expires_in) || old?.refreshExpiresAt,
-      scopes: Array.isArray(raw.scope) ? raw.scope : typeof raw.scope === 'string' ? raw.scope.split(/[ ,]+/).filter(Boolean) : old?.scopes,
+      scopes: connector === 'slack' && typeof raw.authed_user?.scope === 'string' ? raw.authed_user.scope.split(/[ ,]+/).filter(Boolean) : Array.isArray(raw.scope) ? raw.scope : typeof raw.scope === 'string' ? raw.scope.split(/[ ,]+/).filter(Boolean) : old?.scopes,
       ...(server && spec.oauth?.servers ? { server } : {}) };
     return { credential, raw };
   }
@@ -143,7 +145,7 @@ export class ConnectorRuntime {
     if (spec.auth === 'oauth') {
       // Google and Zoho document only the token parameter; revoking the refresh token also ends its access tokens.
       if (spec.oauth?.revoke) {
-        const token = new URLSearchParams({ token: credential.refreshToken || credential.accessToken }).toString();
+        const token = new URLSearchParams({ token: spec.oauth.revokeToken === 'access' ? credential.accessToken : credential.refreshToken || credential.accessToken }).toString();
         const url = this.regional(connector, spec.oauth.revoke, credential.server);
         await this.request(spec.oauth.revokeInQuery ? `${url}?${token}` : url, { method: 'POST', headers: { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' }, ...(spec.oauth.revokeInQuery ? {} : { body: token }) });
       }

@@ -48,12 +48,12 @@ npm run dev   # 或：make dev
 
 | 分类 | 连接器 |
 | --- | --- |
-| 协作与办公 | [Notion](https://www.notion.com) · [Linear](https://linear.app) · [Atlassian](https://www.atlassian.com)（Jira、Confluence）· [ClickUp](https://clickup.com) · [monday.com](https://monday.com) · [Airtable](https://airtable.com) · [Todoist](https://todoist.com) · [Intercom](https://www.intercom.com) · [Gmail](https://mail.google.com) · [Google Calendar](https://calendar.google.com) · [Outlook](https://outlook.com) · [Google Drive](https://drive.google.com) · [Google Sheets](https://sheets.google.com) · [Google Docs](https://docs.google.com) · [Zoho Mail](https://www.zoho.com/mail/) |
+| 协作与办公 | [Notion](https://www.notion.com) · [Linear](https://linear.app) · [Atlassian](https://www.atlassian.com)（Jira、Confluence）· [ClickUp](https://clickup.com) · [monday.com](https://monday.com) · [Airtable](https://airtable.com) · [Todoist](https://todoist.com) · [Intercom](https://www.intercom.com) · [Slack](https://slack.com) · [Microsoft 365](https://www.microsoft.com/microsoft-365) · [Gmail](https://mail.google.com) · [Google Calendar](https://calendar.google.com) · [Outlook](https://outlook.com) · [Google Drive](https://drive.google.com) · [Google Sheets](https://sheets.google.com) · [Google Docs](https://docs.google.com) · [Zoho Mail](https://www.zoho.com/mail/) |
 | 代码与部署 | [GitHub](https://github.com) · [GitLab](https://gitlab.com) · [Vercel](https://vercel.com) · [Netlify](https://www.netlify.com) · [Cloudflare](https://www.cloudflare.com) |
 | 数据库 | [Supabase](https://supabase.com) · [Neon](https://neon.com) · [Prisma](https://www.prisma.io) |
 | 监控与分析 | [Sentry](https://sentry.io) · [PostHog](https://posthog.com) · [Google Search Console](https://search.google.com/search-console) · [Google Analytics](https://analytics.google.com) |
 | 支付 | [Stripe](https://stripe.com) · [PayPal](https://www.paypal.com) · [Square](https://squareup.com) |
-| 设计与建站 | [Canva](https://www.canva.com) · [Miro](https://miro.com) · [Webflow](https://webflow.com) · [Wix](https://www.wix.com) |
+| 设计与建站 | [Figma](https://www.figma.com) · [Canva](https://www.canva.com) · [Miro](https://miro.com) · [Webflow](https://webflow.com) · [Wix](https://www.wix.com) |
 
 - **托管 MCP 连接器（24 个）：** 后台点「启用」即可。Connany 按平台要求自动注册 OAuth 客户端（RFC 7591），使用公开客户端 + PKCE 或带密钥的机密客户端。
 - **GitHub：** 创建 GitHub App，在后台填写 Client ID、Client Secret 和 App slug；用户还需安装 App 并选择仓库。

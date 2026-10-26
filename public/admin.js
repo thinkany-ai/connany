@@ -198,7 +198,7 @@
       const listTools = () => request(`${toolsPath}?${new URLSearchParams({external_user_id:user.value,limit:'5'})}`);
       let result;
       // REST connectors read real data: the sites, properties or mailboxes the account can see.
-      const probes = {google_search_console:'google_search_console.list_sites',google_analytics:'google_analytics.list_account_summaries',gmail:'gmail.get_profile',google_calendar:'google_calendar.list_calendars',google_drive:'google_drive.list_files',outlook:'outlook.get_profile',zoho_mail:'zoho_mail.list_accounts'};
+      const probes = {google_search_console:'google_search_console.list_sites',google_analytics:'google_analytics.list_account_summaries',gmail:'gmail.get_profile',google_calendar:'google_calendar.list_calendars',google_drive:'google_drive.list_files',outlook:'outlook.get_profile',microsoft_365:'microsoft_365.get_profile',zoho_mail:'zoho_mail.list_accounts'};
       if (connector.value === 'github') {
         githubPanel.replaceChildren();
         const installations = [];

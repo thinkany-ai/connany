@@ -17,6 +17,18 @@ const emptyConfig={...config,connectors:connectorClients()};
 const calls:{url:string;auth:string;body:string}[]=[];
 const fetcher:typeof fetch=async(url,init)=>{
   const u=String(url);calls.push({url:u,auth:new Headers(init?.headers).get('Authorization')||'',body:String(init?.body||'')});
+  if(u==='https://login.microsoftonline.com/organizations/oauth2/v2.0/token')return Response.json({access_token:'m365-access',refresh_token:'m365-refresh',expires_in:3600});
+  if(u.startsWith('https://graph.microsoft.com/v1.0/me/drive/root/children'))return Response.json({value:[{id:'file1',name:'Plan'}]});
+  if(u==='https://slack.com/api/oauth.v2.user.access')return Response.json({ok:true,access_token:'slack-access',refresh_token:'slack-refresh',expires_in:3600,authed_user:{id:'U1'},team:{id:'T1',name:'Work'}});
+  if(u==='https://slack.com/api/auth.revoke')return Response.json({ok:true,revoked:true});
+  if(u==='https://api.figma.com/v1/oauth/mcp/register')return Response.json({client_id:'figma-client',client_secret:'figma-secret',token_endpoint_auth_method:'client_secret_post'});
+  if(u==='https://api.figma.com/v1/oauth/token')return Response.json({access_token:'figma-access',refresh_token:'figma-refresh',expires_in:3600});
+  if(u==='https://mcp.slack.com/mcp'||u==='https://mcp.figma.com/mcp'){
+    const request=JSON.parse(String(init?.body));
+    if(request.method==='notifications/initialized')return new Response(null,{status:202});
+    const result=request.method==='initialize'?{protocolVersion:'2025-03-26',capabilities:{},serverInfo:{name:'test',version:'1'}}:request.method==='tools/list'?{tools:[{name:'search',description:'Search',inputSchema:{type:'object'},annotations:{readOnlyHint:true}}]}:{content:[{type:'text',text:'found'}]};
+    return Response.json({jsonrpc:'2.0',id:request.id,result});
+  }
   if(u==='https://login.microsoftonline.com/common/oauth2/v2.0/token')return Response.json({access_token:'microsoft-access',refresh_token:'microsoft-refresh',expires_in:3600});
   if(u==='https://graph.microsoft.com/v1.0/me')return Response.json({id:'ms-user',mail:'alice@example.com'});
   if(u.startsWith('https://graph.microsoft.com/v1.0/me?'))return Response.json({id:'ms-user',mail:'alice@example.com'});
@@ -308,6 +320,30 @@ for (const [name, tool, input, count] of [
   assert.equal(calls.at(-1)!.auth,`Bearer ${name==='outlook'?'microsoft-access':'google-access'}`);
   assert.equal((await pool.query('SELECT 1 FROM connector_tools WHERE connector=$1',[name])).rowCount,0);
   const disconnected=await api(p.api_key,`/connections/${completed.connection_id}?external_user_id=workspace-user`,'DELETE');assert.equal(disconnected.status,200);
+  assert.equal((await pool.query('SELECT credential_ciphertext FROM connections WHERE id=$1',[completed.connection_id])).rows[0].credential_ciphertext,null);
+});
+
+for (const name of ['slack','figma','microsoft_365'] as const) test(`${name} connects through the console and publishes the correct tool catalog`,async()=>{
+  const settings=name==='figma'?{enabled:true}:{client_id:'client',client_secret:'secret',enabled:true};
+  assert.equal((await admin(`/api/connectors/${name}`,'POST',settings)).status,200);
+  const html=await(await admin('/connectors')).text();assert(html.includes(`id="card-${name}"`));
+  if(name!=='figma')assert(html.includes(`/oauth/${name}/callback`));
+  const p=await project(name);
+  const response=await api(p.api_key,`/connectors/${name}/sessions`,'POST',{external_user_id:'collab-user'});assert.equal(response.status,201);const session=await response.json() as any;
+  const start=await app.request(`${session.connect_url}/start`,{method:'POST',headers:{Origin:config.publicBaseUrl}});assert.equal(start.status,200);
+  const authorize=new URL(start.headers.get('refresh')!.slice(6));
+  const callback=await app.request(`http://localhost:3000/oauth/${name}/callback?state=${authorize.searchParams.get('state')}&code=test`,{headers:{Cookie:start.headers.get('set-cookie')!.split(';')[0]}});assert.equal(callback.status,200);
+  const completed=await(await api(p.api_key,`/connectors/${name}/sessions/${session.id}?external_user_id=collab-user`)).json() as any;assert.equal(completed.status,'connected');
+  const connection=await(await api(p.api_key,`/connections/${completed.connection_id}?external_user_id=collab-user`)).json() as any;
+  if(name==='slack'){assert.equal(connection.identity.workspace_id,'T1');assert.equal(connection.identity.account_id,'U1');}
+  const catalog=await(await api(p.api_key,`/tools?connector=${name}`)).json() as any;assert.equal(catalog.total,name==='microsoft_365'?32:1);
+  const tool=name==='microsoft_365'?'list_files':'search';
+  const result=await api(p.api_key,`/connections/${completed.connection_id}/tools/${name}.${tool}/call`,'POST',{external_user_id:'collab-user',input:{}});assert.equal(result.status,200);
+  assert.equal(calls.at(-1)!.auth,`Bearer ${name==='microsoft_365'?'m365':name}-access`);
+  const data=await result.json() as any;
+  if(name==='microsoft_365')assert.equal(data.data.items[0].id,'file1');else assert.equal(data.data.content[0].text,'found');
+  const disconnected=await api(p.api_key,`/connections/${completed.connection_id}?external_user_id=collab-user`,'DELETE');assert.equal(disconnected.status,200);
+  if(name==='slack')assert.equal(new URLSearchParams(calls.at(-1)!.body).get('token'),'slack-access');
   assert.equal((await pool.query('SELECT credential_ciphertext FROM connections WHERE id=$1',[completed.connection_id])).rows[0].credential_ciphertext,null);
 });
 

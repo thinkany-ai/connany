@@ -13,7 +13,7 @@ export interface RestContext {
   call: (request: RestRequest) => Promise<any>;
 }
 export interface RestOperation {
-  connector: 'google_search_console' | 'google_analytics' | 'gmail' | 'zoho_mail' | 'google_calendar' | 'google_drive' | 'google_sheets' | 'google_docs' | 'outlook';
+  connector: 'google_search_console' | 'google_analytics' | 'gmail' | 'zoho_mail' | 'google_calendar' | 'google_drive' | 'google_sheets' | 'google_docs' | 'outlook' | 'microsoft_365';
   description: string;
   read_only: boolean;
   required_permissions: string[];

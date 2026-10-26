@@ -5,6 +5,7 @@ import { githubAccess } from './github-access.js';
 import { linearIdentity, notionIdentity } from './mcp-identity.js';
 import { googleAnalyticsTools, googleSearchConsoleTools } from './google.js';
 import { googleCalendarTools, googleDriveTools, googleSheetsTools, googleDocsTools } from './google-workspace.js';
+import { microsoft365Tools } from './microsoft-365.js';
 import { outlookTools } from './outlook.js';
 import { gmailTools } from './gmail.js';
 import { zohoAccountsServers, zohoMailTools } from './zoho-mail.js';
@@ -55,6 +56,10 @@ export interface McpSpec {
 }
 /** OAuth client the administrator registers with the service, for connectors without dynamic registration. */
 export interface OAuthSpec {
+  /** RFC 8707 resource for a manually registered MCP client. */
+  resource?: string;
+  /** Some APIs revoke an access token rather than a refresh token. */
+  revokeToken?: 'access';
   authorize: string; token: string;
   /** RFC 7009 revocation endpoint. */
   revoke?: string;
@@ -123,6 +128,45 @@ const zoho = 'https://accounts.zoho.com';
 const checked = <T extends object>(identity: T) => ({...identity, identity_checked_at: new Date().toISOString()});
 
 export const connectorCatalog = {
+  slack: {
+    label: 'Slack', category: 'collaboration', website: 'https://slack.com',
+    icon: '<svg aria-hidden="true" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M9 2v8M2 9h8" stroke="#36c5f0" stroke-width="4" stroke-linecap="round"/><path d="M15 2v8M14 9h8" stroke="#2eb67d" stroke-width="4" stroke-linecap="round"/><path d="M15 14v8M14 15h8" stroke="#ecb22e" stroke-width="4" stroke-linecap="round"/><path d="M9 14v8M2 15h8" stroke="#e01e5a" stroke-width="4" stroke-linecap="round"/></svg>',
+    description: { 'zh-CN': '搜索、消息、频道与 Canvas', en: 'Search, messages, channels and canvases' },
+    auth: 'oauth', mcp: { origin: 'https://mcp.slack.com' },
+    oauth: {
+      authorize: 'https://slack.com/oauth/v2_user/authorize', token: 'https://slack.com/api/oauth.v2.user.access',
+      resource: 'https://mcp.slack.com', revoke: 'https://slack.com/api/auth.revoke', revokeToken: 'access',
+      scope: 'search:read.public search:read.private search:read.mpim search:read.im search:read.files search:read.users channels:history channels:read groups:history groups:read im:history im:read mpim:history mpim:read chat:write users:read users:read.email files:read canvases:read canvases:write',
+      console: { url: 'https://api.slack.com/apps', label: { 'zh-CN': '创建 Slack 应用', en: 'Create Slack app' },
+        help: { 'zh-CN': '使用已发布或内部 Slack 应用，启用 MCP，配置用户权限并添加下方回调地址；填写 Client ID 和 Client Secret 后同步工具目录。', en: 'Use a published or internal Slack app, enable MCP, configure user scopes and add the callback below. Save the Client ID and Client Secret, then sync the tool catalog.' } },
+    },
+    async identify(_mcp, _credential, raw) {
+      if (typeof raw.authed_user?.id !== 'string' || !raw.authed_user.id || typeof raw.team?.id !== 'string' || !raw.team.id) throw new UpstreamError('invalid_upstream_identity');
+      return { account_id: raw.authed_user.id, account_name: raw.authed_user.id, workspace_id: raw.team.id, workspace_name: raw.team.name || raw.team.id, transport: 'mcp' };
+    },
+  },
+  figma: {
+    label: 'Figma', category: 'design', website: 'https://www.figma.com',
+    icon: '<svg aria-hidden="true" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M8 0a4 4 0 0 0 0 8h4V0z" fill="#f24e1e"/><path d="M12 0h4a4 4 0 0 1 0 8h-4z" fill="#ff7262"/><path d="M8 8a4 4 0 0 0 0 8h4V8z" fill="#a259ff"/><circle cx="16" cy="12" r="4" fill="#1abcfe"/><path d="M8 16a4 4 0 1 0 4 4v-4z" fill="#0acf83"/></svg>',
+    description: { 'zh-CN': '设计上下文、图表与官方 Figma 工具', en: 'Design context, diagrams and official Figma tools' },
+    auth: 'mcp',
+    mcp: { origin: 'https://mcp.figma.com', oauth: { authorize: 'https://www.figma.com/oauth/mcp', token: 'https://api.figma.com/v1/oauth/token', register: 'https://api.figma.com/v1/oauth/mcp/register' }, scope: 'mcp:connect', clientAuth: 'client_secret_post', resource: 'https://mcp.figma.com/mcp' },
+  },
+  microsoft_365: {
+    label: 'Microsoft 365', category: 'collaboration', website: 'https://www.microsoft.com/microsoft-365',
+    icon: '<svg aria-hidden="true" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path fill="#f25022" d="M1 1h10v10H1z"/><path fill="#7fba00" d="M13 1h10v10H13z"/><path fill="#00a4ef" d="M1 13h10v10H1z"/><path fill="#ffb900" d="M13 13h10v10H13z"/></svg>',
+    description: { 'zh-CN': 'SharePoint、OneDrive、Outlook 与 Teams', en: 'SharePoint, OneDrive, Outlook and Teams' },
+    auth: 'oauth',
+    oauth: {
+      authorize: 'https://login.microsoftonline.com/organizations/oauth2/v2.0/authorize', token: 'https://login.microsoftonline.com/organizations/oauth2/v2.0/token',
+      userinfo: 'https://graph.microsoft.com/v1.0/me',
+      scope: 'openid email profile offline_access ' + ['User.Read','Mail.ReadWrite','Mail.Send','Calendars.ReadWrite','Files.Read.All','Sites.Read.All','Team.ReadBasic.All','Channel.ReadBasic.All','ChannelMessage.Read.All','Chat.Read','ChatMessage.Send','ChannelMessage.Send'].map(s => `https://graph.microsoft.com/${s}`).join(' '),
+      authorizeParams: { prompt: 'select_account' },
+      profile: me => ({ id: me.id, email: me.mail || me.userPrincipalName, name: me.displayName }),
+      console: { url: 'https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade', label: { 'zh-CN': '注册 Microsoft 365 应用', en: 'Register Microsoft 365 application' },
+        help: { 'zh-CN': '注册支持组织目录的应用，添加 Web 回调地址和客户端密钥；按配置文档添加 Graph 委托权限，Teams 和 SharePoint 权限可能需要租户管理员同意。', en: 'Register an app for organizational directories, add the Web redirect URI and client secret, and configure delegated Graph permissions from the setup guide. Teams and SharePoint may require tenant administrator consent.' } },
+    }, rest: microsoft365Tools,
+  },
   notion: {
     label: 'Notion',
     category: 'collaboration',

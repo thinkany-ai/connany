@@ -236,3 +236,69 @@ Outlook 使用 Microsoft Graph v1.0 REST API，支持邮件与日历。连接器
 断开连接会清除 Connany 保存的凭证。此连接器没有单独撤销该应用授权的远端接口；如需撤销 Microsoft 端的同意，请在 Microsoft 账户或组织的应用权限管理中移除授权。
 
 接口参考：[委托授权](https://learn.microsoft.com/en-gb/graph/auth-v2-user)、[邮件列表](https://learn.microsoft.com/en-us/graph/api/user-list-messages?view=graph-rest-1.0)、[发送邮件](https://learn.microsoft.com/en-us/graph/api/user-sendmail?view=graph-rest-1.0)、[日历时间窗口](https://learn.microsoft.com/en-us/graph/api/calendar-list-calendarview?view=graph-rest-1.0)。
+
+## Slack
+
+连接器 ID 为 `slack`。使用 [Slack 官方 MCP](https://docs.slack.dev/ai/slack-mcp-server/)，工具在授权或管理员同步时动态获取，包括搜索、读取消息与线程、发送消息和 Canvas 操作。Slack 不提供动态客户端注册，因此需要管理员配置 Slack 应用凭证。
+
+1. 在 [Slack Apps](https://api.slack.com/apps) 创建内部应用，或使用已发布的应用；按官方 MCP 指南启用应用的 MCP 能力。未发布且非内部的应用不能使用 Slack MCP。
+2. 在 OAuth 配置中添加 `https://connect.example.com/oauth/slack/callback`。
+3. 配置下列 **User Token Scopes**（不是 Bot Token Scopes）：
+
+   ```text
+   search:read.public search:read.private search:read.mpim search:read.im
+   search:read.files search:read.users
+   channels:history channels:read groups:history groups:read
+   im:history im:read mpim:history mpim:read
+   chat:write users:read users:read.email files:read canvases:read canvases:write
+   ```
+
+4. 在 Connany 后台「Slack → 配置」填写 Client ID 和 Client Secret、启用，然后「同步工具目录」。也可以直接创建用户连接，授权后会更新目录。
+
+使用 `/oauth/v2_user/authorize` 与 `oauth.v2.user.access`，支持 PKCE 和刷新令牌轮换。账号以授权响应的用户 ID 和工作区 ID 绑定；同一用户在不同工作区有独立连接。暂以用户 ID 显示账号名称。接口返回 `ok:false` 时会视为失败，即使 HTTP 状态为 200。断开时调用 `auth.revoke` 撤销访问令牌并清除本地凭证。
+
+工具名为 `slack.<官方工具名>`。目录可能包含需要额外权限的工具，当前默认范围覆盖搜索、消息、文件读取和 Canvas，不包含上传文件、管理 Slack Lists 或创建频道的权限。具体可用工具受工作区策略、应用审批及实际授予权限限制。读取安全性根据官方 `readOnlyHint` 标注；未标注的工具按写操作处理。
+
+## Figma
+
+连接器 ID 为 `figma`，使用 [Figma 官方远程 MCP](https://developers.figma.com/docs/figma-mcp-server/)，地址为 `https://mcp.figma.com/mcp`。在后台启用时，Connany 按服务公布的 OAuth 元数据注册 confidential client，使用 `mcp:connect` 范围和 PKCE；无需手动填写 REST API token。
+
+启用后「同步工具目录」或创建用户连接完成授权，工具名称为 `figma.<官方工具名>`。设计上下文、图表等能力由上游动态提供，实际工具受 Figma 账户、席位、文件访问权限和客户端准入政策影响。若注册被 Figma 拒绝，后台会显示上游原因；需要按 Figma 的要求申请客户端访问资格，不能改用其他应用的 Client ID。
+
+若上游未提供可确认的用户身份，连接会显示为未验证身份；现有机制不会把它冒认为一个已验证的 Figma 账号。Figma 公布的元数据未提供撤销端点，因此断开会清除本地凭证；如需撤销平台授权，在 Figma 账号的应用管理中操作。
+
+## Microsoft 365
+
+连接器 ID 为 `microsoft_365`，使用 Microsoft Graph 全球云及 `organizations` OAuth 端点，仅面向工作/学校账号。它与 `outlook` 是独立连接器和授权：个人 Microsoft 邮箱继续使用 Outlook。
+
+1. 在 Microsoft Entra 注册支持组织目录的应用，可使用与 Outlook 相同的应用，但须增加回调和权限。
+2. 添加 Web 回调：`https://connect.example.com/oauth/microsoft_365/callback`。
+3. 创建客户端密钥，并在 Connany 后台配置 Client ID 和密钥 Value。
+4. 添加以下 Microsoft Graph **委托权限**，按租户要求完成管理员同意，然后启用并授权：
+
+   ```text
+   User.Read Mail.ReadWrite Mail.Send Calendars.ReadWrite
+   Files.Read.All Sites.Read.All
+   Team.ReadBasic.All Channel.ReadBasic.All ChannelMessage.Read.All
+   Chat.Read ChatMessage.Send ChannelMessage.Send
+   ```
+
+授权同时请求 `openid email profile offline_access`。所有调用以当前用户身份执行，不能访问用户本身无权查看的资源。Teams、SharePoint 和邮箱功能需要对应的组织服务和授权。
+
+共有 32 个内置工具，统一使用 `microsoft_365.` 前缀：
+
+| 能力 | 工具 |
+|---|---|
+| Outlook 邮件与日历 | 与上文 Outlook 相同的 16 个工具，改用 `microsoft_365.` 前缀 |
+| 跨服务搜索 | `search`，支持 `driveItem`、`site`、`message`、`chatMessage`，每次一种实体类型 |
+| OneDrive / SharePoint 文件 | `list_drives`、`list_files`、`get_file` |
+| SharePoint 网站与列表 | `search_sites`、`get_site`、`list_site_lists`、`list_list_items` |
+| Teams 团队与频道 | `list_teams`、`list_channels`、`list_channel_messages`、`list_channel_replies` |
+| Teams 聊天 | `list_chats`、`list_chat_messages` |
+| Teams 发送 | `send_chat_message`、`send_channel_message`（支持回复线程） |
+
+文件工具提供元数据、浏览器链接和搜索摘要；不提供 Office 文件正文解析、二进制下载或上传。SharePoint 列表工具返回字段内容。文件和站点权限为只读，邮件、日历、Teams 发送工具按写操作处理。默认 SDK 策略不会自动执行写工具。
+
+列表返回 `next_page_url`，传入同一工具的 `page_url` 翻页，并保持相同资源 ID。分页地址必须仍是对应的 Graph 资源，不能跳转到其他地址。Microsoft 365 搜索通过 `from` 和 `size` 翻页。后台「试读数据」读取账号资料；验证 Teams、文件或网站权限需调用对应工具。
+
+接口参考：[Microsoft Search](https://learn.microsoft.com/en-us/graph/api/search-query?view=graph-rest-1.0)、[Drive 文件列表](https://learn.microsoft.com/en-us/graph/api/driveitem-list-children?view=graph-rest-1.0)、[SharePoint 搜索](https://learn.microsoft.com/en-us/graph/api/site-search?view=graph-rest-1.0)、[Teams 频道消息](https://learn.microsoft.com/en-us/graph/api/channel-list-messages?view=graph-rest-1.0)。

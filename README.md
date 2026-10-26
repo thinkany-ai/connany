@@ -47,12 +47,12 @@ To use an existing database, set `DATABASE_URL` in `.env` and skip the Docker st
 
 | Category | Connectors |
 | --- | --- |
-| Collaboration | [Notion](https://www.notion.com) · [Linear](https://linear.app) · [Atlassian](https://www.atlassian.com) (Jira, Confluence) · [ClickUp](https://clickup.com) · [monday.com](https://monday.com) · [Airtable](https://airtable.com) · [Todoist](https://todoist.com) · [Intercom](https://www.intercom.com) · [Gmail](https://mail.google.com) · [Google Calendar](https://calendar.google.com) · [Outlook](https://outlook.com) · [Google Drive](https://drive.google.com) · [Google Sheets](https://sheets.google.com) · [Google Docs](https://docs.google.com) · [Zoho Mail](https://www.zoho.com/mail/) |
+| Collaboration | [Notion](https://www.notion.com) · [Linear](https://linear.app) · [Atlassian](https://www.atlassian.com) (Jira, Confluence) · [ClickUp](https://clickup.com) · [monday.com](https://monday.com) · [Airtable](https://airtable.com) · [Todoist](https://todoist.com) · [Intercom](https://www.intercom.com) · [Slack](https://slack.com) · [Microsoft 365](https://www.microsoft.com/microsoft-365) · [Gmail](https://mail.google.com) · [Google Calendar](https://calendar.google.com) · [Outlook](https://outlook.com) · [Google Drive](https://drive.google.com) · [Google Sheets](https://sheets.google.com) · [Google Docs](https://docs.google.com) · [Zoho Mail](https://www.zoho.com/mail/) |
 | Code & deploy | [GitHub](https://github.com) · [GitLab](https://gitlab.com) · [Vercel](https://vercel.com) · [Netlify](https://www.netlify.com) · [Cloudflare](https://www.cloudflare.com) |
 | Databases | [Supabase](https://supabase.com) · [Neon](https://neon.com) · [Prisma](https://www.prisma.io) |
 | Monitoring & analytics | [Sentry](https://sentry.io) · [PostHog](https://posthog.com) · [Google Search Console](https://search.google.com/search-console) · [Google Analytics](https://analytics.google.com) |
 | Payments | [Stripe](https://stripe.com) · [PayPal](https://www.paypal.com) · [Square](https://squareup.com) |
-| Design & websites | [Canva](https://www.canva.com) · [Miro](https://miro.com) · [Webflow](https://webflow.com) · [Wix](https://www.wix.com) |
+| Design & websites | [Figma](https://www.figma.com) · [Canva](https://www.canva.com) · [Miro](https://miro.com) · [Webflow](https://webflow.com) · [Wix](https://www.wix.com) |
 
 - **Hosted MCP connectors (24):** click **Enable** in the console. Connany registers an OAuth client with the provider (RFC 7591), using a public client with PKCE or a confidential client as the provider requires.
 - **GitHub:** create a GitHub App and enter its Client ID, Client Secret and App slug in the console. Users also install the App and choose repositories.
