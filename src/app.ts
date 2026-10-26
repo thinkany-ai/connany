@@ -221,7 +221,8 @@ export function createApp(service: Service) {
     const state = z.string().length(43).parse(c.req.query('state'));
     const s = await service.findCallback(connector, state);
     const browser = getCookie(c, `connany_${s.id}`) || '';
-    const result = await service.finish(s, browser, c.req.query('code'), !!c.req.query('error'));
+    // Zoho names the user's data center in accounts-server; the runtime accepts only known ones.
+    const result = await service.finish(s, browser, c.req.query('code'), !!c.req.query('error'), c.req.query('accounts-server'));
     deleteCookie(c, `connany_${s.id}`, { path: `/oauth/${connector}/callback`, secure: service.runtime.config.publicBaseUrl.startsWith('https:') });
     if (s.purpose === 'tool_sync') return c.html(toolSyncPage(s.connector, result.errorCode, result.toolCount ?? 0), result.errorCode ? 400 : 200);
     const runtime = await service.connectorStore.resolve(s.connector, s.connector_app_id);

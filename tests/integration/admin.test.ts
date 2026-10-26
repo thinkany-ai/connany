@@ -17,10 +17,21 @@ const emptyConfig={...config,connectors:connectorClients()};
 const calls:{url:string;auth:string;body:string}[]=[];
 const fetcher:typeof fetch=async(url,init)=>{
   const u=String(url);calls.push({url:u,auth:new Headers(init?.headers).get('Authorization')||'',body:String(init?.body||'')});
+  if(u==='https://login.microsoftonline.com/common/oauth2/v2.0/token')return Response.json({access_token:'microsoft-access',refresh_token:'microsoft-refresh',expires_in:3600});
+  if(u==='https://graph.microsoft.com/v1.0/me')return Response.json({id:'ms-user',mail:'alice@example.com'});
+  if(u.startsWith('https://graph.microsoft.com/v1.0/me?'))return Response.json({id:'ms-user',mail:'alice@example.com'});
+  if(u.startsWith('https://www.googleapis.com/calendar/v3/users/me/calendarList'))return Response.json({items:[{id:'primary'}]});
+  if(u.startsWith('https://www.googleapis.com/drive/v3/files'))return Response.json({files:[{id:'file1',name:'Plan'}]});
+  if(u.startsWith('https://sheets.googleapis.com/v4/spreadsheets/sheet1'))return Response.json({spreadsheetId:'sheet1'});
+  if(u.startsWith('https://docs.googleapis.com/v1/documents/doc1'))return Response.json({documentId:'doc1'});
   if(u==='https://oauth2.googleapis.com/token')return Response.json({access_token:'google-access',refresh_token:'google-refresh',expires_in:3599,scope:'openid email https://www.googleapis.com/auth/analytics.readonly'});
   if(u==='https://openidconnect.googleapis.com/v1/userinfo')return Response.json({sub:'1099',email:'alice@example.com'});
   if(u==='https://oauth2.googleapis.com/revoke')return new Response(null,{status:200});
   if(u.startsWith('https://analyticsadmin.googleapis.com/v1beta/accountSummaries'))return Response.json({accountSummaries:[{account:'accounts/1',displayName:'Acme',propertySummaries:[{property:'properties/123',displayName:'acme.com',propertyType:'PROPERTY_TYPE_ORDINARY'}]}]});
+  if(u==='https://accounts.zoho.eu/oauth/v2/token')return Response.json({access_token:'zoho-access',refresh_token:'zoho-refresh',expires_in:3600,api_domain:'https://www.zohoapis.eu'});
+  if(u==='https://accounts.zoho.eu/oauth/user/info')return Response.json({ZUID:778,Email:'kim@example.eu',Display_Name:'Kim'});
+  if(u==='https://accounts.zoho.eu/oauth/v2/token/revoke?token=zoho-refresh')return Response.json({status:'success'});
+  if(u==='https://mail.zoho.eu/api/accounts')return Response.json({status:{code:200},data:[{accountId:'1234',primaryEmailAddress:'kim@example.eu',displayName:'Kim'}]});
   if(u.endsWith('/login/oauth/access_token'))return Response.json({access_token:'upstream-token',refresh_token:'upstream-refresh',expires_in:3600,workspace_id:'w',workspace_name:'Work',bot_id:'bot',owner:{user:{id:'alice',name:'Alice'}}});
   if(u.endsWith('/oauth/revoke'))return Response.json({});
   if(u.endsWith('/user')) return Response.json({id:42,login:'alice'});
@@ -176,6 +187,21 @@ test('Google Analytics uses an administrator OAuth client and built-in REST tool
   const disconnected=await(await api(p.api_key,`/connections/${completed.connection_id}?external_user_id=analyst`,'DELETE')).json() as any;
   assert.equal(disconnected.revocation_status,'succeeded');assert.equal(calls.at(-1)!.body,'token=google-refresh');
 });
+test('Zoho Mail connects users of another data center and calls its Mail API there',async()=>{
+  assert.equal((await admin('/api/connectors/zoho_mail','POST',{client_id:'zoho-client',client_secret:'zoho-secret',enabled:true})).status,200);
+  const dialog=(await(await admin('/connectors')).text()).split('id="connector-zoho_mail"')[1];assert(dialog.includes('创建 Zoho OAuth 客户端')&&dialog.includes('Multi-DC'));
+  const p=await project('Mail');
+  const session=await(await api(p.api_key,'/connectors/zoho_mail/sessions','POST',{external_user_id:'kim'})).json() as any;
+  const start=await app.request(`${session.connect_url}/start`,{method:'POST',headers:{Origin:config.publicBaseUrl}});
+  const authorize=new URL(start.headers.get('refresh')!.slice(6));assert.equal(authorize.origin,'https://accounts.zoho.com');
+  const result=await app.request(`http://localhost:3000/oauth/zoho_mail/callback?state=${authorize.searchParams.get('state')}&code=test&location=eu&accounts-server=${encodeURIComponent('https://accounts.zoho.eu')}`,{headers:{Cookie:start.headers.get('set-cookie')!.split(';')[0]}});assert.equal(result.status,200);
+  const completed=await(await api(p.api_key,`/connectors/zoho_mail/sessions/${session.id}?external_user_id=kim`)).json() as any;assert.equal(completed.status,'connected');
+  const connection=await(await api(p.api_key,`/connections/${completed.connection_id}?external_user_id=kim`)).json() as any;assert.equal(connection.identity.account_name,'kim@example.eu');
+  const call=await(await api(p.api_key,`/connections/${completed.connection_id}/tools/zoho_mail.list_accounts/call`,'POST',{external_user_id:'kim',input:{}})).json() as any;
+  assert.equal(call.data.accounts[0].account_id,'1234');assert.equal(calls.at(-1)!.url,'https://mail.zoho.eu/api/accounts');assert.equal(calls.at(-1)!.auth,'Zoho-oauthtoken zoho-access');
+  const disconnected=await(await api(p.api_key,`/connections/${completed.connection_id}?external_user_id=kim`,'DELETE')).json() as any;
+  assert.equal(disconnected.revocation_status,'succeeded');assert.equal(calls.at(-1)!.url,'https://accounts.zoho.eu/oauth/v2/token/revoke?token=zoho-refresh');
+});
 test('administrators manage console users; members use the workbench but not the System section',async()=>{
   const signIn=async(email:string,password:string)=>{
     const login=await app.request('http://localhost:3000/admin/api/login',{method:'POST',headers:{Origin:config.publicBaseUrl,'Content-Type':'application/json'},body:JSON.stringify({email,password})});
@@ -257,6 +283,34 @@ test('self-service sign-up is closed by default; when opened it creates a signed
   assert.equal((await anon('/api/signup','POST',{...form,email:'other@example.com'})).status,403);
   assert.equal((await pool.query("SELECT count(*)::int n FROM admin_audit WHERE action IN ('signup.opened','signup.closed','user.signed_up')")).rows[0].n,3);
 });
+
+for (const [name, tool, input, count] of [
+  ['google_calendar','list_calendars',{},6],
+  ['google_drive','list_files',{},5],
+  ['google_sheets','get_spreadsheet',{spreadsheet_id:'sheet1'},6],
+  ['google_docs','get_document',{document_id:'doc1'},4],
+  ['outlook','get_profile',{},16],
+] as const) test(`${name} configures, authorizes and executes through the public API`,async()=>{
+  assert.equal((await admin(`/api/connectors/${name}`,'POST',{client_id:'workspace-client',client_secret:'workspace-secret',enabled:true})).status,200);
+  const html=await(await admin('/connectors')).text();
+  assert(html.includes(`/oauth/${name}/callback`));assert(html.includes(`id="card-${name}"`));
+  const p=await project(name);
+  const catalog=await(await api(p.api_key,`/tools?connector=${name}`)).json() as any;assert.equal(catalog.total,count);
+  const response=await api(p.api_key,`/connectors/${name}/sessions`,'POST',{external_user_id:'workspace-user'});assert.equal(response.status,201);
+  const session=await response.json() as any;
+  const start=await app.request(`${session.connect_url}/start`,{method:'POST',headers:{Origin:config.publicBaseUrl}});assert.equal(start.status,200);
+  const authorize=new URL(start.headers.get('refresh')!.slice(6));
+  assert.equal(authorize.searchParams.get('client_id'),'workspace-client');
+  const callback=await app.request(`http://localhost:3000/oauth/${name}/callback?state=${authorize.searchParams.get('state')}&code=test`,{headers:{Cookie:start.headers.get('set-cookie')!.split(';')[0]}});assert.equal(callback.status,200);
+  const completed=await(await api(p.api_key,`/connectors/${name}/sessions/${session.id}?external_user_id=workspace-user`)).json() as any;assert.equal(completed.status,'connected');
+  const result=await api(p.api_key,`/connections/${completed.connection_id}/tools/${name}.${tool}/call`,'POST',{external_user_id:'workspace-user',input});assert.equal(result.status,200);
+  const data=await result.json() as any;assert(data.data);
+  assert.equal(calls.at(-1)!.auth,`Bearer ${name==='outlook'?'microsoft-access':'google-access'}`);
+  assert.equal((await pool.query('SELECT 1 FROM connector_tools WHERE connector=$1',[name])).rowCount,0);
+  const disconnected=await api(p.api_key,`/connections/${completed.connection_id}?external_user_id=workspace-user`,'DELETE');assert.equal(disconnected.status,200);
+  assert.equal((await pool.query('SELECT credential_ciphertext FROM connections WHERE id=$1',[completed.connection_id])).rows[0].credential_ciphertext,null);
+});
+
 test('logout and admin password reset revoke sessions, and login attempts are limited',async()=>{
   assert.equal((await admin('/api/logout','POST',{})).status,200);assert.equal((await admin('/api/projects')).status,401);
   const login=await admin('/api/login','POST',{email:'admin@example.com',password:'test-admin-password-123'});cookie=login.headers.get('set-cookie')!.split(';')[0];

@@ -197,8 +197,8 @@
       const callTool = (tool,input) => request(`${toolsPath}/${encodeURIComponent(tool)}/call`,{external_user_id:user.value,input});
       const listTools = () => request(`${toolsPath}?${new URLSearchParams({external_user_id:user.value,limit:'5'})}`);
       let result;
-      // REST connectors read real data: the sites or properties the account can see.
-      const probes = {google_search_console:'google_search_console.list_sites',google_analytics:'google_analytics.list_account_summaries'};
+      // REST connectors read real data: the sites, properties or mailboxes the account can see.
+      const probes = {google_search_console:'google_search_console.list_sites',google_analytics:'google_analytics.list_account_summaries',gmail:'gmail.get_profile',google_calendar:'google_calendar.list_calendars',google_drive:'google_drive.list_files',outlook:'outlook.get_profile',zoho_mail:'zoho_mail.list_accounts'};
       if (connector.value === 'github') {
         githubPanel.replaceChildren();
         const installations = [];
@@ -235,7 +235,7 @@
         status.textContent = '读取成功。空列表表示当前授权范围内没有可见数据。';
       } else {
         result = await listTools();
-        status.textContent = '读取成功。空列表表示当前授权范围内没有可见数据。';
+        status.textContent = ['google_sheets','google_docs'].includes(connector.value) ? '工具目录已加载。读取实际内容需使用表格或文档 ID 调用读取工具。' : '读取成功。空列表表示当前授权范围内没有可见数据。';
       }
       output.textContent = JSON.stringify(result,null,2); output.hidden = false;
     }));

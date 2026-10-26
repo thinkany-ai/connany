@@ -102,6 +102,42 @@ Google 不提供 Search Console 和 Analytics 的托管 MCP，也不支持动态
 
 授权时请求 `access_type=offline` 和 `prompt=consent`，保证每次授权都拿到 refresh token。账号以 Google userinfo 的 `sub` 识别，显示为邮箱。断开连接会调用 `https://oauth2.googleapis.com/revoke` 撤销 refresh token。
 
+## Gmail
+
+Gmail 同样没有官方托管 MCP，配置方式与上面的 Google 连接器相同，可以共用同一个 OAuth 客户端。
+
+1. 在 Google Cloud 项目的「API 和服务 → 库」中启用 **Gmail API**。
+2. OAuth 同意屏幕的「数据访问」中添加 `openid`、`email`、`https://www.googleapis.com/auth/gmail.modify`。
+3. 在 OAuth 客户端的「已获授权的重定向 URI」加入 `https://connect.example.com/oauth/gmail/callback`。
+4. 在管理后台「连接器 → Gmail → 配置」填写 Client ID 和 Client Secret，「连接测试」试读会返回邮箱地址和邮件数量。
+
+`gmail.modify` 可以读取、起草、发送邮件和修改标签，但不能永久删除邮件。它是 Google 的**受限范围**（restricted scope）：测试中（Testing）和内部（Internal）应用可以直接使用；对外正式发布前，除应用验证外还需要通过第三方安全评估（CASA），每年复审。只给自己团队用时，建议使用 Google Workspace 的内部应用。
+
+| 工具 | 说明 |
+|---|---|
+| `get_profile`、`list_labels` | 邮箱地址、邮件数量；系统标签与自定义标签的 ID |
+| `search_messages` | Gmail 搜索语法（如 `from:alice is:unread newer_than:7d`），返回发件人、收件人、主题、时间、摘要和标签，用 `page_token` 翻页 |
+| `get_message`、`get_thread` | 读取单封邮件或整个会话，正文解码为纯文本（只有 HTML 时转为文本），列出附件名称；正文默认最多 20000 字符 |
+| `create_draft`、`send_draft`、`send_message`（写） | 起草、发送草稿或直接发送；`reply_to_message_id` 会放进原会话并带上 `In-Reply-To` / `References` |
+| `modify_labels`（写） | 批量加减标签：已读（移除 `UNREAD`）、归档（移除 `INBOX`）、星标（添加 `STARRED`） |
+
+## Zoho Mail
+
+Zoho 没有支持动态注册的托管 MCP。管理员在 Zoho API Console 创建客户端，Connany 调用 Zoho Mail REST API。
+
+1. 打开 [Zoho API Console](https://api-console.zoho.com/)，新建 **Server-based Applications** 类型的客户端，「Authorized Redirect URIs」填 `https://connect.example.com/oauth/zoho_mail/callback`。
+2. 在客户端的 Settings 中开启 **Multi-DC**，并勾选需要支持的数据中心。不开启时，只有与客户端同一数据中心（通常是 zoho.com）的用户能授权。
+3. 在管理后台「连接器 → Zoho Mail → 配置」填写 Client ID 和 Client Secret，「连接测试」试读会列出用户的邮件账户。
+
+授权从 `accounts.zoho.com` 发起，Zoho 会把其他数据中心的用户转到所属数据中心，并在回调中带上 `accounts-server`。Connany 只接受已知的数据中心（com、eu、in、com.au、jp、uk、sa、zohocloud.ca、com.cn），之后换取 token、刷新、识别账号、调用 Mail API（`mail.zoho.<域>`）和撤销都在该数据中心进行。请求的 scope 为 `ZohoMail.accounts.READ`、`ZohoMail.folders.READ`、`ZohoMail.messages.ALL` 和 `AaaServer.profile.READ`，账号以 ZUID 识别，显示为邮箱。
+
+| 工具 | 说明 |
+|---|---|
+| `list_accounts`、`list_folders` | 邮件账户（其他工具都需要 `account_id`）和文件夹 ID |
+| `list_messages`、`search_messages` | 按文件夹列出（可筛选已读 / 未读），或用 Zoho 搜索语法（如 `sender:alice@example.com::has:attachment`）；用 `start` 翻页 |
+| `get_message` | 读取单封邮件，正文默认转为纯文本 |
+| `send_message`、`reply_message`、`create_draft`（写） | 发送、回复（可全部回复）、存为草稿；不填 `from_address` 时使用账户主地址 |
+
 ## 其他官方托管 MCP 连接器
 
 以下连接器和 Notion、Linear 一样走官方 MCP 授权：管理员在「连接器」点启用，Connany 自动完成 OAuth 客户端注册（动态客户端注册，RFC 7591），然后点「同步工具目录」用自己的账号授权一次。不需要去各平台申请应用或填写凭证。
@@ -140,13 +176,63 @@ curl -s https://mcp.example.com/.well-known/oauth-protected-resource/mcp
 curl -s https://<授权服务器>/.well-known/oauth-authorization-server
 ```
 
-没有托管 MCP 或不支持动态注册的服务（如 Google）使用 `auth: 'oauth'`：
+没有托管 MCP 或不支持动态注册的服务（如 Google、Zoho）使用 `auth: 'oauth'`：
 
-- `oauth`：`authorize`、`token`，可选 `revoke`（RFC 7009）、`userinfo`（OIDC，用 `sub` 或 `id` 识别账号）、`scope`、`authorizeParams`，以及后台配置弹框中的 `console`（创建客户端的链接和说明）。管理员在后台填写 Client ID / Secret。
-- `rest`：Connany 自己实现的工具，参考 `src/connectors/google.ts`：每个工具有 zod 参数、请求构造和可选的结果整理。工具名用 `<连接器>.<小写下划线>`，与 MCP 工具名规则一致。工具目录随代码发布，不写入 `connector_tools`。
+- `oauth`：`authorize`、`token`，可选 `revoke`（RFC 7009，`revokeInQuery` 表示 token 放在查询参数里）、`userinfo`（OIDC，用 `sub` 或 `id` 识别账号；非 OIDC 的返回用 `profile` 映射）、`scope`、`tokenType`（API 请求的 Authorization 前缀，默认 `Bearer`）、`authorizeParams`、`servers`（多数据中心服务允许的 accounts server，由回调参数 `accounts-server` 选择），以及后台配置弹框中的 `console`（创建客户端的链接和说明）。管理员在后台填写 Client ID / Secret。
+- `rest`：Connany 自己实现的工具，参考 `src/connectors/google.ts`、`gmail.ts`、`zoho-mail.ts`：每个工具有 zod 参数，以及单次请求构造加可选的结果整理（`request` / `response`），或需要多次请求时用 `run`。工具名用 `<连接器>.<小写下划线>`，与 MCP 工具名规则一致。工具目录随代码发布，不写入 `connector_tools`。
 
 后台「连接器」、连接路由、工具校验、工具列表会自动出现新连接器，无需修改数据库。GitHub App 的安装流程仍在 `ConnectorRuntime`（`src/connectors/index.ts`）中单独实现。
 
 升级到此版本需运行一次 `pnpm db:migrate`（`005_provider_catalog.sql` 移除数据库中写死的连接器名单约束）。
 
 `006_projects_connectors.sql` 统一了术语：`provider_settings` / `provider_apps` 改名为 `connectors` / `connector_apps`，连接与会话的 `provider` 列改名为 `connector`，项目的 API Key 拆分到 `api_keys` 表（现有 Key 自动迁移、继续可用），并新增预留的 `workspaces` 表。
+
+## Google Calendar、Drive、Sheets、Docs
+
+这四个连接器使用 Google OAuth 和内置 REST 工具，可以与 Gmail 共用 OAuth 客户端，但各自配置、授权并保存连接。
+
+1. 在 Google Cloud 中启用要使用的 API：Google Calendar API、Google Drive API、Google Sheets API、Google Docs API。
+2. 创建「Web 应用」OAuth 客户端，在同意屏幕配置相应数据访问范围。
+3. 为每个连接器添加回调 URI：`https://connect.example.com/oauth/<连接器 ID>/callback`。
+4. 在 Connany 后台对应连接器填写 Client ID、Client Secret 并启用，再进行连接测试。
+
+| 连接器 ID | 除 `openid email` 外的 scope（前缀均为 `https://www.googleapis.com/auth/`） | 内置工具 |
+|---|---|---|
+| `google_calendar` | `calendar.events`、`calendar.calendarlist.readonly` | `list_calendars`、`list_events`、`get_event`、`create_event`、`update_event`、`delete_event` |
+| `google_drive` | `drive` | `list_files`、`get_file`、`create_folder`、`update_file`、`trash_file` |
+| `google_sheets` | `spreadsheets` | `get_spreadsheet`、`read_values`、`update_values`、`append_values`、`clear_values`、`create_spreadsheet` |
+| `google_docs` | `documents` | `get_document`、`create_document`、`insert_text`、`replace_text` |
+
+完整工具名为 `<连接器 ID>.<工具名>`。工具经现有 REST 目录自动发布，不需要同步远程 MCP 工具或新增数据库迁移。SDK 默认只读；写入需按现有工具策略显式启用。
+
+- Calendar 列表支持翻页，事件列表展开重复事件。创建、修改、删除事件默认 `send_updates=all`，会通知参会人；全天事件结束日期不包含当天。
+- Drive 提供文件搜索、元数据和文件夹管理，支持共享云端硬盘文件；不提供二进制上传/下载，Docs/Sheets 内容使用对应连接器读取。`trash_file` 可恢复，不永久删除。为了搜索和管理用户已有文件，当前使用完整 `drive` 范围，而非仅应用创建/用户选择的文件范围。该范围属于受限范围，发布前按 [Google 的范围说明](https://developers.google.com/workspace/drive/api/guides/api-specific-auth)完成适用的验证和安全评估。
+- Sheets 的 `range` 使用 A1 格式，例如 `Sheet1!A1:D20`，读取时尽量指定有限范围。写入默认 `RAW`，需要计算公式时使用 `USER_ENTERED`。文件 ID 来自表格 URL 或 Drive 搜索。
+- Docs 返回所有标签页的结构化内容；插入位置使用 UTF-16 索引，省略 `index` 为追加，省略 `tab_id` 为首个标签页。`replace_text` 默认匹配所有标签页。可传 `required_revision_id` 防止覆盖其他人的并发编辑。
+- Sheets、Docs 后台测试会列出工具目录；验证实际数据访问需提供表格/文档 ID 调用读取工具。目录展示本身不代表文件读取已成功。
+
+接口参考：[Calendar](https://developers.google.com/workspace/calendar/api/v3/reference)、[Drive](https://developers.google.com/workspace/drive/api/reference/rest/v3/files/list)、[Sheets](https://developers.google.com/workspace/sheets/api/reference/rest)、[Docs](https://developers.google.com/workspace/docs/api/reference/rest/v1/documents/batchUpdate)。
+
+## Outlook
+
+Outlook 使用 Microsoft Graph v1.0 REST API，支持邮件与日历。连接器 ID 为 `outlook`，使用 Microsoft 全球云的 `common` 授权端点。
+
+1. 在 [Microsoft Entra 应用注册](https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade)创建应用，账户类型选择「任何组织目录中的账户和个人 Microsoft 账户」。
+2. 添加 **Web** 重定向 URI：`https://connect.example.com/oauth/outlook/callback`。
+3. 创建客户端密钥，在 Connany 后台填写应用（客户端）ID 和密钥的 **Value**（不是 Secret ID）。
+4. 添加 Microsoft Graph **委托权限**：`User.Read`、`Mail.ReadWrite`、`Mail.Send`、`Calendars.ReadWrite`。授权请求还包括 `openid email profile offline_access`，用于登录和刷新令牌。租户策略可能要求管理员同意。
+5. 启用连接器并进行连接测试，试读会返回 Microsoft 账号信息；邮箱/日历操作需要该账号有对应邮箱服务。
+
+| 能力 | 工具（统一以 `outlook.` 为前缀） |
+|---|---|
+| 账号与邮件读取 | `get_profile`、`list_folders`、`list_messages`、`get_message` |
+| 邮件写入 | `create_draft`、`send_draft`、`send_message`、`reply_message`、`mark_read`、`move_message` |
+| 日历 | `list_calendars`、`list_events`、`get_event`、`create_event`、`update_event`、`delete_event` |
+
+邮件搜索支持 Outlook 查询语法，如 `from:alice@example.com`。列表返回 `next_page_url`，后续请求将其原样传入 `page_url`，并保持相同的文件夹/日历 ID。连接器仅接受同一 Microsoft Graph 资源的分页 URL。邮件正文转换为有长度限制的纯文本，发送结果 `accepted: true` 只表示 Microsoft 已接受请求，不代表投递成功。
+
+事件查询需要包含时区偏移的起止时间；创建事件的 `dateTime` 使用本地时间（不带偏移），`timeZone` 默认 UTC，也可传 Microsoft 支持的时区，如 `China Standard Time`。邀请、更新和删除会议可能向参会人发送通知。
+
+断开连接会清除 Connany 保存的凭证。此连接器没有单独撤销该应用授权的远端接口；如需撤销 Microsoft 端的同意，请在 Microsoft 账户或组织的应用权限管理中移除授权。
+
+接口参考：[委托授权](https://learn.microsoft.com/en-gb/graph/auth-v2-user)、[邮件列表](https://learn.microsoft.com/en-us/graph/api/user-list-messages?view=graph-rest-1.0)、[发送邮件](https://learn.microsoft.com/en-us/graph/api/user-sendmail?view=graph-rest-1.0)、[日历时间窗口](https://learn.microsoft.com/en-us/graph/api/calendar-list-calendarview?view=graph-rest-1.0)。

@@ -1,21 +1,13 @@
 import { z } from 'zod';
+import { query, type RestOperation } from './rest.js';
 
 /**
  * Google Search Console and Google Analytics tools. Google offers no hosted MCP server for them,
  * so Connany calls the REST APIs itself with the user's OAuth token. Responses are reshaped into
  * compact rows keyed by dimension and metric names, which agents read far more easily.
  */
-export interface GoogleOperation {
-  connector: 'google_search_console' | 'google_analytics';
-  description: string;
-  read_only: boolean;
-  required_permissions: string[];
-  schema: z.ZodObject;
-  request: (input: any) => { url: string; method?: string; body?: unknown };
-  response?: (raw: any, input: any) => unknown;
-}
+export type GoogleOperation = RestOperation;
 const e = encodeURIComponent;
-const query = (values: Record<string, unknown>) => new URLSearchParams(Object.entries(values).filter(([, v]) => v !== undefined).map(([k, v]) => [k, String(v)])).toString();
 
 // Search Console: https://developers.google.com/webmaster-tools/v1/api_reference_index
 const webmasters = 'https://www.googleapis.com/webmasters/v3';

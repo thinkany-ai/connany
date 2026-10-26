@@ -48,7 +48,7 @@ npm run dev   # 或：make dev
 
 | 分类 | 连接器 |
 | --- | --- |
-| 协作与办公 | [Notion](https://www.notion.com) · [Linear](https://linear.app) · [Atlassian](https://www.atlassian.com)（Jira、Confluence）· [ClickUp](https://clickup.com) · [monday.com](https://monday.com) · [Airtable](https://airtable.com) · [Todoist](https://todoist.com) · [Intercom](https://www.intercom.com) |
+| 协作与办公 | [Notion](https://www.notion.com) · [Linear](https://linear.app) · [Atlassian](https://www.atlassian.com)（Jira、Confluence）· [ClickUp](https://clickup.com) · [monday.com](https://monday.com) · [Airtable](https://airtable.com) · [Todoist](https://todoist.com) · [Intercom](https://www.intercom.com) · [Gmail](https://mail.google.com) · [Google Calendar](https://calendar.google.com) · [Outlook](https://outlook.com) · [Google Drive](https://drive.google.com) · [Google Sheets](https://sheets.google.com) · [Google Docs](https://docs.google.com) · [Zoho Mail](https://www.zoho.com/mail/) |
 | 代码与部署 | [GitHub](https://github.com) · [GitLab](https://gitlab.com) · [Vercel](https://vercel.com) · [Netlify](https://www.netlify.com) · [Cloudflare](https://www.cloudflare.com) |
 | 数据库 | [Supabase](https://supabase.com) · [Neon](https://neon.com) · [Prisma](https://www.prisma.io) |
 | 监控与分析 | [Sentry](https://sentry.io) · [PostHog](https://posthog.com) · [Google Search Console](https://search.google.com/search-console) · [Google Analytics](https://analytics.google.com) |

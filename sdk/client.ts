@@ -1,7 +1,7 @@
 /** Server-side SDK. Do not bundle the project key into a browser, mobile app or LLM prompt. */
 /** Groups connectors for display: collaboration, development, data, analytics, payments, design. */
 export type ConnectorCategory = 'collaboration' | 'development' | 'data' | 'analytics' | 'payments' | 'design';
-export type ConnectorName = 'notion' | 'github' | 'linear' | 'sentry' | 'posthog' | 'atlassian' | 'vercel' | 'supabase' | 'neon' | 'netlify' | 'gitlab' | 'cloudflare' | 'prisma' | 'stripe' | 'paypal' | 'square' | 'clickup' | 'monday' | 'airtable' | 'todoist' | 'miro' | 'canva' | 'intercom' | 'webflow' | 'wix' | 'google_search_console' | 'google_analytics';
+export type ConnectorName = 'notion' | 'github' | 'linear' | 'sentry' | 'posthog' | 'atlassian' | 'vercel' | 'supabase' | 'neon' | 'netlify' | 'gitlab' | 'cloudflare' | 'prisma' | 'stripe' | 'paypal' | 'square' | 'clickup' | 'monday' | 'airtable' | 'todoist' | 'miro' | 'canva' | 'intercom' | 'webflow' | 'wix' | 'google_search_console' | 'google_analytics' | 'gmail' | 'zoho_mail' | 'google_calendar' | 'google_drive' | 'google_sheets' | 'google_docs' | 'outlook';
 /** A remote MCP server one user added by URL; used as a connector by `name`. */
 export type CustomConnectorName = `mcp_${string}`;
 export interface CustomConnector { name: CustomConnectorName; title: string; url: string; website: string; avatar_url: string; created_at: string }

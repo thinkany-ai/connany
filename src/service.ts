@@ -142,18 +142,18 @@ export class Service {
     if (!rows[0]) throw new AppError('invalid_state', 'This authorization has expired or was already completed. Request a new link.', 400);
     return rows[0];
   }
-  async finish(s: any, browser: string, code?: string, denied = false) {
+  async finish(s: any, browser: string, code?: string, denied = false, server?: string) {
     if (!browser || hash(browser) !== s.browser_hash) throw new AppError('browser_mismatch', 'Complete authorization in the browser where you opened the connection link.', 400);
     // Consume before contacting the upstream service: a callback/code can only be processed once.
     const claimed = await this.pool.query(`UPDATE connect_sessions SET status='processing',state_hash=NULL,browser_hash=NULL,verifier_ciphertext=NULL WHERE id=$1 AND status='authorizing' AND expires_at>now() RETURNING id`, [s.id]);
     if (!claimed.rowCount) throw new AppError('invalid_state', 'This authorization has already been processed.');
-    if (s.purpose === 'tool_sync') return this.finishToolSync(s, code, denied);
+    if (s.purpose === 'tool_sync') return this.finishToolSync(s, code, denied, server);
     let errorCode: string | null = denied ? 'access_denied' : !code ? 'missing_code' : null;
     let connection: Connection | undefined;
     if (!errorCode) {
       try {
         const runtime = await this.connectorStore.resolve(s.connector, s.connector_app_id);
-        const { credential, raw } = await runtime.exchange(s.connector, code!, this.vault.open<string>(s.verifier_ciphertext, s.id));
+        const { credential, raw } = await runtime.exchange(s.connector, code!, this.vault.open<string>(s.verifier_ciphertext, s.id), server);
         const identity = await runtime.identify(s.connector, credential, raw);
         // Refresh the connector's tool catalog with the user's own fresh credential; optional.
         try { await this.connectorStore.in(await this.workspaceOf(s.project_id)).saveTools(s.connector, await runtime.tools(s.connector, credential)); } catch {}
@@ -201,13 +201,13 @@ export class Service {
       VALUES($1,NULL,$2,$3,$4,'authorizing',$5,$6,$7,$8,$9,'tool_sync',$10)`, [sessionId, adminId, connector, hash(randomToken()), hash(state), hash(browser), this.vault.seal(verifier, sessionId), new Date(Date.now() + 15 * 60 * 1000), active.appId, workspaceId]);
     return { session: { id: sessionId, connector }, browser, url };
   }
-  private async finishToolSync(s: any, code?: string, denied = false) {
+  private async finishToolSync(s: any, code?: string, denied = false, server?: string) {
     let errorCode: string | null = denied ? 'access_denied' : !code ? 'missing_code' : null;
     let toolCount: number | undefined;
     if (!errorCode) {
       try {
         const runtime = await this.connectorStore.resolve(s.connector, s.connector_app_id);
-        const { credential } = await runtime.exchange(s.connector, code!, this.vault.open<string>(s.verifier_ciphertext, s.id));
+        const { credential } = await runtime.exchange(s.connector, code!, this.vault.open<string>(s.verifier_ciphertext, s.id), server);
         try {
           const tools = await runtime.tools(s.connector, credential);
           await this.connectorStore.in(s.workspace_id).saveTools(s.connector, tools); toolCount = tools.length;

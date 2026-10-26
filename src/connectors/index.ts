@@ -3,19 +3,34 @@ import { genericIdentity } from './mcp-identity.js';
 import { z } from 'zod';
 import { githubRestTools } from './github-rest.js';
 import { googleTools } from './google.js';
+import { googleWorkspaceTools } from './google-workspace.js';
+import { outlookTools } from './outlook.js';
+import { gmailTools } from './gmail.js';
+import { zohoMailTools } from './zoho-mail.js';
+import type { RestOperation, RestRequest } from './rest.js';
 import type { Config } from '../config.js';
 import { connector as definition, connectorNames, isCustomConnector, type AnyConnector } from './catalog.js';
 import { guardFetch, systemLookup, type HostLookup } from './remote-mcp.js';
 import { challenge } from '../crypto.js';
 import { AppError, UpstreamError } from '../errors.js';
 
-export interface Credentials { accessToken: string; refreshToken?: string; expiresAt?: string; refreshExpiresAt?: string; scopes?: string[] }
+export interface Credentials {
+  accessToken: string; refreshToken?: string; expiresAt?: string; refreshExpiresAt?: string; scopes?: string[];
+  /** Regional accounts server the account authorized with (Zoho data centers); see OAuthSpec.servers. */
+  server?: string;
+}
 export interface Identity { account_id: string; account_name: string; workspace_id?: string; workspace_name?: string; [key: string]: unknown }
 export type Fetcher = typeof fetch;
 const pagination = { limit: z.number().int().min(1).max(100).default(20), cursor: z.string().max(500).optional() };
+/** Tools Connany implements against REST APIs, for connectors with `rest` in the catalog. */
+const restOperations: Record<string, RestOperation> = { ...googleTools, ...gmailTools, ...zohoMailTools, ...googleWorkspaceTools, ...outlookTools };
 export const restTools = {
+  ...googleWorkspaceTools,
+  ...outlookTools,
   ...githubRestTools,
   ...googleTools,
+  ...gmailTools,
+  ...zohoMailTools,
   'github.installations.list': { connector: 'github', description: 'List installations of this GitHub App accessible to the user.', schema: z.object({ page: z.number().int().min(1).max(10000).default(1), limit: pagination.limit }).strict() },
   'github.repositories.list': { connector: 'github', description: 'List repositories accessible to both the user and a GitHub App installation.', schema: z.object({ installation_id: z.number().int().positive(), page: z.number().int().min(1).max(10000).default(1), limit: pagination.limit }).strict() },
 } as const;
@@ -53,6 +68,13 @@ export class ConnectorRuntime {
     if (resource) url.searchParams.set('resource', resource);
     return url.toString();
   }
+  /** The endpoint at the user's regional accounts server, when the connector has regions; otherwise as configured. */
+  private regional(connector: AnyConnector, url: string, server?: string) {
+    const servers = definition(connector).oauth?.servers;
+    if (!servers || !server) return url;
+    if (!servers.includes(server)) throw new UpstreamError('invalid_accounts_server');
+    return server + new URL(url).pathname;
+  }
   private mcpClient(connector: AnyConnector) { const app = this.client(connector); return { clientId: app.clientId, clientSecret: app.clientSecret, authMethod: app.authMethod || 'none' } as const; }
   private basic(connector: AnyConnector) { const p = this.client(connector); return `Basic ${Buffer.from(`${p.clientId}:${p.clientSecret}`).toString('base64')}`; }
   private async request(url: string, init: RequestInit, tokenRequest = false): Promise<any> {
@@ -62,27 +84,31 @@ export class ConnectorRuntime {
     let body: any;
     try { body = response.status === 204 ? {} : await response.json(); } catch { body = {}; }
     if (!response.ok || body.error) {
-      const authError = tokenRequest && ['invalid_grant', 'bad_refresh_token', 'expired_token', 'invalid_refresh_token'].includes(body.error);
+      // Zoho answers a revoked or unknown refresh token with invalid_code.
+      const authError = tokenRequest && ['invalid_grant', 'bad_refresh_token', 'expired_token', 'invalid_refresh_token', 'invalid_code'].includes(body.error);
       const status = response.status === 429 ? 429 : (!tokenRequest && response.status === 401) || authError ? 401 : 502;
-      // Google API errors explain themselves (API not enabled, no access to the property, unknown metric).
-      const message = typeof body.error?.message === 'string' ? body.error.message.slice(0, 500) : undefined;
+      // Google and Zoho API errors explain themselves (API not enabled, no access to the property, unknown metric, invalid folder).
+      const explanation = [body.error?.message, body.data?.moreInfo, body.status?.description].find(v => typeof v === 'string' && v);
+      const message = explanation ? explanation.slice(0, 500) : undefined;
       throw new UpstreamError(authError ? 'reauth_required' : 'upstream_error', status, { upstream_status: response.status, ...(message ? { upstream_message: message } : {}), ...(response.headers.get('retry-after') ? { retry_after: response.headers.get('retry-after') } : {}) });
     }
     return body;
   }
-  private async token(connector: AnyConnector, fields: Record<string, string>, old?: Credentials) {
+  private async token(connector: AnyConnector, fields: Record<string, string>, old?: Credentials, server = old?.server) {
     const app = this.client(connector);
     const spec = definition(connector);
-    const raw = spec.auth === 'mcp' ? await this.mcp(connector).token(this.mcpClient(connector), fields) : await this.request(spec.oauth!.token, { method: 'POST', headers: { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({...fields,client_id:app.clientId,client_secret:app.clientSecret}).toString() }, true);
+    const raw = spec.auth === 'mcp' ? await this.mcp(connector).token(this.mcpClient(connector), fields) : await this.request(this.regional(connector, spec.oauth!.token, server), { method: 'POST', headers: { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({...fields,client_id:app.clientId,client_secret:app.clientSecret}).toString() }, true);
     if (typeof raw.access_token !== 'string' || !raw.access_token) throw new UpstreamError('invalid_token_response');
     const expires = (seconds: unknown) => typeof seconds === 'number' && seconds > 0 ? new Date(Date.now() + seconds * 1000).toISOString() : undefined;
     const credential: Credentials = { accessToken: raw.access_token, refreshToken: raw.refresh_token || old?.refreshToken,
       expiresAt: expires(raw.expires_in), refreshExpiresAt: expires(raw.refresh_token_expires_in) || old?.refreshExpiresAt,
-      scopes: Array.isArray(raw.scope) ? raw.scope : typeof raw.scope === 'string' ? raw.scope.split(/[ ,]+/).filter(Boolean) : old?.scopes };
+      scopes: Array.isArray(raw.scope) ? raw.scope : typeof raw.scope === 'string' ? raw.scope.split(/[ ,]+/).filter(Boolean) : old?.scopes,
+      ...(server && spec.oauth?.servers ? { server } : {}) };
     return { credential, raw };
   }
-  async exchange(connector: AnyConnector, code: string, verifier: string) {
-    return this.token(connector, { grant_type: 'authorization_code', code, redirect_uri: this.callback(connector), code_verifier: verifier });
+  /** `server`: the callback's `accounts-server` parameter, for connectors with regional accounts servers. */
+  async exchange(connector: AnyConnector, code: string, verifier: string, server?: string) {
+    return this.token(connector, { grant_type: 'authorization_code', code, redirect_uri: this.callback(connector), code_verifier: verifier }, undefined, definition(connector).oauth?.servers ? server : undefined);
   }
   async refresh(connector: AnyConnector, credential: Credentials) {
     if (!credential.refreshToken || (credential.refreshExpiresAt && Date.parse(credential.refreshExpiresAt) <= Date.now())) throw new UpstreamError('reauth_required', 401);
@@ -98,10 +124,11 @@ export class ConnectorRuntime {
     if (spec.auth === 'mcp') return genericIdentity(this.mcp(connector), credential, raw, spec.label);
     if (spec.auth === 'oauth') {
       if (!spec.oauth?.userinfo) throw new UpstreamError('invalid_upstream_identity');
-      const me = await this.request(spec.oauth.userinfo, { headers: { Authorization: `Bearer ${credential.accessToken}`, Accept: 'application/json' } });
-      const accountId = me.sub ?? me.id;
+      const me = await this.request(this.regional(connector, spec.oauth.userinfo, credential.server), { headers: { Authorization: `${spec.oauth.tokenType || 'Bearer'} ${credential.accessToken}`, Accept: 'application/json' } });
+      const profile = spec.oauth.profile ? spec.oauth.profile(me) : { id: me.sub ?? me.id, email: me.email, name: me.name };
+      const accountId = profile.id;
       if ((typeof accountId !== 'string' && typeof accountId !== 'number') || accountId === '') throw new UpstreamError('invalid_upstream_identity');
-      return { account_id: String(accountId), account_name: String(me.email || me.name || `${spec.label} account`), ...(typeof me.email === 'string' ? { email: me.email } : {}) };
+      return { account_id: String(accountId), account_name: String(profile.email || profile.name || `${spec.label} account`), ...(typeof profile.email === 'string' ? { email: profile.email } : {}) };
     }
     if (spec.auth === 'github_app') {
       const me = await this.api('github', '/user', credential);
@@ -114,8 +141,12 @@ export class ConnectorRuntime {
   async revoke(connector: AnyConnector, credential: Credentials) {
     const spec = definition(connector);
     if (spec.auth === 'oauth') {
-      // Google documents only the token parameter; revoking the refresh token also ends its access tokens.
-      if (spec.oauth?.revoke) await this.request(spec.oauth.revoke, { method: 'POST', headers: { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ token: credential.refreshToken || credential.accessToken }).toString() });
+      // Google and Zoho document only the token parameter; revoking the refresh token also ends its access tokens.
+      if (spec.oauth?.revoke) {
+        const token = new URLSearchParams({ token: credential.refreshToken || credential.accessToken }).toString();
+        const url = this.regional(connector, spec.oauth.revoke, credential.server);
+        await this.request(spec.oauth.revokeInQuery ? `${url}?${token}` : url, { method: 'POST', headers: { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' }, ...(spec.oauth.revokeInQuery ? {} : { body: token }) });
+      }
     } else if (spec.auth === 'github_app') {
       await this.request(`https://api.github.com/applications/${encodeURIComponent(this.config.connectors.github.clientId)}/token`, { method: 'DELETE', headers: { Authorization: this.basic(connector), Accept: 'application/vnd.github+json', 'Content-Type': 'application/json', 'X-GitHub-Api-Version': this.config.githubVersion, 'User-Agent': 'Connany/0.1' }, body: JSON.stringify({ access_token: credential.accessToken }) });
     } else {
@@ -129,12 +160,15 @@ export class ConnectorRuntime {
   /** `known`: the tool is in the cached catalog, so the upstream list is not fetched to check it. */
   async execute(name: ToolName, input: any, credential: Credentials, known = false): Promise<unknown> {
     if (!Object.hasOwn(restTools,name)) return this.mcp(name.split('.')[0] as AnyConnector).call(name,input,credential,known);
-    if (Object.hasOwn(googleTools, name)) {
-      const operation = googleTools[name as keyof typeof googleTools];
+    if (Object.hasOwn(restOperations, name)) {
+      const operation = restOperations[name];
       const parsed = operation.schema.parse(input);
-      const request = operation.request(parsed);
-      const raw = await this.request(request.url, { method: request.method || 'GET', headers: { Authorization: `Bearer ${credential.accessToken}`, Accept: 'application/json', ...(request.body === undefined ? {} : { 'Content-Type': 'application/json' }) },
+      const authorization = `${definition(operation.connector).oauth?.tokenType || 'Bearer'} ${credential.accessToken}`;
+      const call = (request: RestRequest) => this.request(request.url, { method: request.method || 'GET', headers: { Authorization: authorization, Accept: 'application/json', ...(request.body === undefined ? {} : { 'Content-Type': 'application/json' }) },
         ...(request.body === undefined ? {} : { body: JSON.stringify(request.body) }) });
+      const context = { server: credential.server, call };
+      if (operation.run) return operation.run(parsed, context);
+      const raw = await call(operation.request!(parsed, context));
       return operation.response ? operation.response(raw, parsed) : raw;
     }
     if (Object.hasOwn(githubRestTools, name)) {

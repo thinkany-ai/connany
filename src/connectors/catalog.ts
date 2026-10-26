@@ -3,7 +3,12 @@ import type { HostedMcp } from './hosted-mcp.js';
 import type { ConnectorRuntime, Credentials, Identity } from './index.js';
 import { githubAccess } from './github-access.js';
 import { linearIdentity, notionIdentity } from './mcp-identity.js';
-import { googleAnalyticsTools, googleSearchConsoleTools, type GoogleOperation } from './google.js';
+import { googleAnalyticsTools, googleSearchConsoleTools } from './google.js';
+import { googleCalendarTools, googleDriveTools, googleSheetsTools, googleDocsTools } from './google-workspace.js';
+import { outlookTools } from './outlook.js';
+import { gmailTools } from './gmail.js';
+import { zohoAccountsServers, zohoMailTools } from './zoho-mail.js';
+import type { RestOperation } from './rest.js';
 import type { Localized } from '../i18n.js';
 
 /**
@@ -55,7 +60,18 @@ export interface OAuthSpec {
   revoke?: string;
   /** OIDC userinfo, used to identify the account. */
   userinfo?: string;
+  /** Account from a userinfo response that is not OIDC (`sub`/`id` and `email`). */
+  profile?: (me: any) => { id?: unknown; email?: unknown; name?: unknown };
   scope?: string;
+  /** Authorization header scheme for API calls. Defaults to Bearer. */
+  tokenType?: string;
+  /** The revocation endpoint takes the token in the query string instead of the form body. */
+  revokeInQuery?: boolean;
+  /**
+   * Regional accounts servers (Zoho data centers). The callback names the user's in `accounts-server`;
+   * the code is exchanged, refreshed, identified and revoked there instead of at the default origin.
+   */
+  servers?: string[];
   authorizeParams?: Record<string, string>;
   /** Where administrators create the client, linked from the console. */
   console?: { url: string; label: Localized; help: Localized };
@@ -86,7 +102,7 @@ export interface ConnectorDefinition {
   mcp?: McpSpec;
   oauth?: OAuthSpec;
   /** Tools Connany implements against the service's REST API, instead of an upstream MCP tool list. */
-  rest?: Record<string, GoogleOperation>;
+  rest?: Record<string, RestOperation>;
   /** Resolve the account from the token response. MCP connectors without one use OIDC claims or userinfo, see genericIdentity. */
   identify?: (mcp: HostedMcp, credential: Credentials, raw: any) => Promise<Identity>;
   /** Refresh display names for existing connections without changing account identity. */
@@ -103,6 +119,7 @@ const google = (scope: string, apis: string, apisEn = apis): OAuthSpec => ({
     help: { 'zh-CN': `在 Google Cloud 项目中启用 ${apis}，创建「Web 应用」类型的 OAuth 客户端，并把下方回调地址加入「已获授权的重定向 URI」。`,
       en: `Enable the ${apisEn} in a Google Cloud project, create a "Web application" OAuth client and add the callback URL below to its authorized redirect URIs.` } },
 });
+const zoho = 'https://accounts.zoho.com';
 const checked = <T extends object>(identity: T) => ({...identity, identity_checked_at: new Date().toISOString()});
 
 export const connectorCatalog = {
@@ -377,6 +394,77 @@ export const connectorCatalog = {
     auth: 'oauth',
     oauth: google('https://www.googleapis.com/auth/analytics.readonly', 'Google Analytics Data API 和 Google Analytics Admin API', 'Google Analytics Data API and Google Analytics Admin API'),
     rest: googleAnalyticsTools,
+  },
+  // Workspace connectors use administrator-registered OAuth clients and built-in REST tools.
+  google_calendar: {
+    label: 'Google Calendar', category: 'collaboration', website: 'https://calendar.google.com', icon: '<svg aria-hidden="true" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><rect x="2" y="4" width="20" height="18" rx="3" fill="#4285f4"/><path d="M7 2v5M17 2v5M2 10h20" stroke="#fff" stroke-width="2"/><path d="M7 13h4l-3 3h3v3H7m8-6v6" fill="none" stroke="#fff" stroke-width="1.5"/></svg>',
+    description: { 'zh-CN': '日历、日程与会议邀请', en: 'Calendars, events and meeting invitations' },
+    auth: 'oauth', oauth: google('https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/calendar.calendarlist.readonly', 'Google Calendar API'), rest: googleCalendarTools,
+  },
+  google_drive: {
+    label: 'Google Drive', category: 'collaboration', website: 'https://drive.google.com', icon: '<svg aria-hidden="true" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M8 2h8l8 14h-8z" fill="#fbbc04"/><path d="M8 2 0 16l4 7 8-14z" fill="#34a853"/><path d="M4 23h16l4-7H8z" fill="#4285f4"/></svg>',
+    description: { 'zh-CN': '文件搜索、文件夹与文件管理', en: 'File search, folders and file management' },
+    auth: 'oauth', oauth: google('https://www.googleapis.com/auth/drive', 'Google Drive API'), rest: googleDriveTools,
+  },
+  google_sheets: {
+    label: 'Google Sheets', category: 'collaboration', website: 'https://sheets.google.com', icon: '<svg aria-hidden="true" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M5 1h10l5 5v17H5z" fill="#0f9d58"/><path d="M15 1v5h5" fill="#87ceac"/><path d="M8 11h9v8H8zm0 4h9m-5-4v8" fill="none" stroke="#fff"/></svg>',
+    description: { 'zh-CN': '表格读取、单元格写入与追加', en: 'Spreadsheets, cell reads, writes and appends' },
+    auth: 'oauth', oauth: google('https://www.googleapis.com/auth/spreadsheets', 'Google Sheets API'), rest: googleSheetsTools,
+  },
+  google_docs: {
+    label: 'Google Docs', category: 'collaboration', website: 'https://docs.google.com', icon: '<svg aria-hidden="true" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M5 1h10l5 5v17H5z" fill="#4285f4"/><path d="M15 1v5h5" fill="#a1c2fa"/><path d="M8 11h9m-9 4h9m-9 4h6" stroke="#fff" stroke-width="1.5"/></svg>',
+    description: { 'zh-CN': '文档读取、创建与文本编辑', en: 'Document reading, creation and text editing' },
+    auth: 'oauth', oauth: google('https://www.googleapis.com/auth/documents', 'Google Docs API'), rest: googleDocsTools,
+  },
+  outlook: {
+    label: 'Outlook', category: 'collaboration', website: 'https://outlook.com', icon: '<svg aria-hidden="true" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><rect x="7" y="3" width="16" height="18" rx="2" fill="#0078d4"/><path d="m7 9 8 6 8-6" fill="none" stroke="#fff"/><rect y="5" width="13" height="15" rx="1" fill="#0364b8"/><ellipse cx="6.5" cy="12.5" rx="3" ry="4" fill="none" stroke="#fff" stroke-width="1.8"/></svg>',
+    description: { 'zh-CN': '邮件、草稿、日历与会议', en: 'Mail, drafts, calendars and meetings' },
+    auth: 'oauth',
+    oauth: {
+      authorize: 'https://login.microsoftonline.com/common/oauth2/v2.0/authorize',
+      token: 'https://login.microsoftonline.com/common/oauth2/v2.0/token',
+      userinfo: 'https://graph.microsoft.com/v1.0/me',
+      scope: 'openid email profile offline_access https://graph.microsoft.com/User.Read https://graph.microsoft.com/Mail.ReadWrite https://graph.microsoft.com/Mail.Send https://graph.microsoft.com/Calendars.ReadWrite',
+      authorizeParams: { prompt: 'select_account' },
+      profile: me => ({ id: me.id, email: me.mail || me.userPrincipalName, name: me.displayName }),
+      console: { url: 'https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade',
+        label: { 'zh-CN': '注册 Microsoft 应用', en: 'Register Microsoft application' },
+        help: { 'zh-CN': '注册支持组织目录和个人 Microsoft 账户的应用，添加 Web 回调地址；创建客户端密钥，配置 User.Read、Mail.ReadWrite、Mail.Send、Calendars.ReadWrite 委托权限。', en: 'Register an app for organizational directories and personal Microsoft accounts, add the Web redirect URI, create a client secret and configure delegated User.Read, Mail.ReadWrite, Mail.Send and Calendars.ReadWrite permissions.' } },
+    },
+    rest: outlookTools,
+  },
+  gmail: {
+    label: 'Gmail',
+    category: 'collaboration',
+    website: 'https://mail.google.com',
+    description: { 'zh-CN': '搜索、阅读、起草与发送邮件', en: 'Search, read, draft and send email' },
+    // Simple Icons (CC0).
+    icon: '<svg aria-hidden="true" fill="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M24 5.457v13.909c0 .904-.732 1.636-1.636 1.636h-3.819V11.73L12 16.64l-6.545-4.91v9.273H1.636A1.636 1.636 0 0 1 0 19.366V5.457c0-2.023 2.309-3.178 3.927-1.964L5.455 4.64 12 9.548l6.545-4.91 1.528-1.145C21.69 2.28 24 3.434 24 5.457z"/></svg>',
+    auth: 'oauth',
+    oauth: google('https://www.googleapis.com/auth/gmail.modify', 'Gmail API'),
+    rest: gmailTools,
+  },
+  // Zoho has no hosted MCP with dynamic registration. Administrators register a server-based client
+  // with multi-DC enabled; users of every data center authorize at accounts.zoho.com and are sent home.
+  zoho_mail: {
+    label: 'Zoho Mail',
+    category: 'collaboration',
+    website: 'https://www.zoho.com/mail/',
+    description: { 'zh-CN': '邮件、文件夹与收发信', en: 'Email, folders, sending and replies' },
+    // Simple Icons (CC0).
+    icon: '<svg aria-hidden="true" fill="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M8.66 6.897a1.299 1.299 0 0 0-1.205.765l-.642 1.44-.062-.385A1.291 1.291 0 0 0 5.27 7.648l-4.185.678A1.291 1.291 0 0 0 .016 9.807l.678 4.18a1.293 1.293 0 0 0 1.27 1.087c.074 0 .143-.01.216-.017l4.18-.678c.436-.07.784-.351.96-.723l2.933 1.307a1.304 1.304 0 0 0 .988.026c.321-.12.575-.365.716-.678l.28-.629.038.276a1.297 1.297 0 0 0 1.455 1.103l3.712-.501a1.29 1.29 0 0 0 1.03.514h4.236c.713 0 1.29-.58 1.291-1.291V9.545c0-.712-.58-1.291-1.291-1.291h-4.236c-.079 0-.155.008-.23.022a1.309 1.309 0 0 0-.275-.288c-.275-.21-.614-.3-.958-.253l-4.197.571c-.155.021-.3.07-.432.14L9.159 7.01a1.27 1.27 0 0 0-.499-.113zm-.025.705c.077 0 .159.013.24.052l2.971 1.324c-.128.238-.18.508-.142.782l.357 2.596h.002l-.745 1.672a.59.59 0 0 1-.777.296l-3.107-1.385-.004-.041-.41-2.526L8.1 7.95a.589.589 0 0 1 .536-.348zm-3.159.733c.125 0 .245.039.343.112.13.09.21.227.237.382l.234 1.446-.56 1.259a1.27 1.27 0 0 0-.026.987c.12.322.364.575.678.717l.295.131a.585.585 0 0 1-.428.314l-4.185.678a.59.59 0 0 1-.674-.485l-.678-4.18a.588.588 0 0 1 .485-.674l4.185-.678c.03-.004.064-.01.094-.01zm11.705.09a.59.59 0 0 1 .415.173 1.287 1.287 0 0 0-.416.947v4.237c0 .033.003.065.005.097l-3.55.482a.586.586 0 0 1-.66-.502l-.191-1.403.899-2.017a1.29 1.29 0 0 0-.333-1.5l3.754-.51c.026-.004.051-.004.077-.004zm1.3.532h4.227c.326 0 .588.266.588.588v4.237a.589.589 0 0 1-.588.588h-4.237a.564.564 0 0 1-.12-.013c.47-.246.758-.765.684-1.318zm-5.988.309.254.113c.296.133.43.48.296.777l-.432.97-.207-1.465a.58.58 0 0 1 .09-.395zm5.39.538.453 3.325a.583.583 0 0 1-.453.65zM6.496 11.545l.17 1.052a.588.588 0 0 1-.293-.776zm3.985 4.344a.588.588 0 0 0-.612.603c0 .358.244.61.601.61a.582.582 0 0 0 .607-.608c0-.35-.242-.605-.596-.605zm5.545 0a.588.588 0 0 0-.612.603c0 .358.245.61.602.61a.582.582 0 0 0 .606-.608c0-.35-.24-.605-.596-.605zm-8.537.018a.047.047 0 0 0-.048.047v.085c0 .026.021.047.048.047h.52l-.623.9a.052.052 0 0 0-.009.027v.027c0 .026.021.047.048.047h.815a.047.047 0 0 0 .047-.047v-.085a.047.047 0 0 0-.047-.047h-.55l.606-.9a.05.05 0 0 0 .008-.026v-.028a.047.047 0 0 0-.047-.047zm5.303 0a.047.047 0 0 0-.047.047v1.086c0 .026.02.047.047.047h.135a.047.047 0 0 0 .047-.047v-.454h.545v.454c0 .026.02.047.047.047h.134a.047.047 0 0 0 .047-.047v-1.086a.047.047 0 0 0-.047-.047h-.134a.047.047 0 0 0-.047.047v.453h-.545v-.453a.047.047 0 0 0-.047-.047zm-2.324.164c.25 0 .372.194.372.425 0 .219-.109.425-.358.426-.242 0-.375-.197-.375-.419 0-.235.108-.432.36-.432zm5.545 0c.25 0 .372.194.372.425 0 .219-.108.425-.358.426-.242 0-.374-.197-.374-.419 0-.235.108-.432.36-.432z"/></svg>',
+    auth: 'oauth',
+    oauth: {
+      authorize: `${zoho}/oauth/v2/auth`, token: `${zoho}/oauth/v2/token`, revoke: `${zoho}/oauth/v2/token/revoke`, revokeInQuery: true,
+      userinfo: `${zoho}/oauth/user/info`, profile: me => ({ id: me.ZUID, email: me.Email, name: me.Display_Name }),
+      scope: 'ZohoMail.accounts.READ,ZohoMail.folders.READ,ZohoMail.messages.ALL,AaaServer.profile.READ', tokenType: 'Zoho-oauthtoken',
+      authorizeParams: { access_type: 'offline', prompt: 'consent' }, servers: zohoAccountsServers,
+      console: { url: 'https://api-console.zoho.com/',
+        label: { 'zh-CN': '创建 Zoho OAuth 客户端', en: 'Create Zoho OAuth client' },
+        help: { 'zh-CN': '在 Zoho API Console 创建「Server-based Applications」类型的客户端，把下方回调地址填入「Authorized Redirect URIs」，并在客户端设置中开启多数据中心（Multi-DC），让各数据中心的用户都能授权。',
+          en: 'In the Zoho API Console, create a "Server-based Applications" client, add the callback URL below to its authorized redirect URIs and enable multi-DC in the client settings so users of every data center can authorize.' } },
+    },
+    rest: zohoMailTools,
   },
 } satisfies Record<string, ConnectorDefinition>;
 
