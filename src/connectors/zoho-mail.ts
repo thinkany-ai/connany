@@ -43,8 +43,13 @@ async function mail(i: any, context: RestContext, extra: Record<string, unknown>
 }
 const sent = (raw: any) => ({ message_id: raw.data?.messageId === undefined ? undefined : String(raw.data.messageId), status: raw.status?.description });
 
-const tool = (description: string, read_only: boolean, shape: z.ZodRawShape, rest: Pick<RestOperation, 'request' | 'response' | 'run'>): RestOperation =>
-  ({ connector: 'zoho_mail', description, read_only, required_permissions: [read_only ? 'Zoho Mail: read' : 'Zoho Mail: send'], schema: z.object(shape).strict(), ...rest });
+const tool = (description: string, read_only: boolean, shape: z.ZodRawShape, rest: Pick<RestOperation, 'request' | 'response' | 'run'>, permission = read_only ? 'Zoho Mail: read' : 'Zoho Mail: send'): RestOperation =>
+  ({ connector: 'zoho_mail', description, read_only, required_permissions: [permission], schema: z.object(shape).strict(), ...rest });
+/** Read state, spam, archive and moves share one endpoint, picked by `mode`. IDs stay strings: they exceed JavaScript's safe integers. */
+const update = (i: any, context: RestContext, body: Record<string, unknown>) =>
+  ({ url: `${api(context)}/accounts/${e(i.account_id)}/updatemessage`, method: 'PUT', body: { ...body, messageId: i.message_ids } });
+const modes = { read: 'markAsRead', unread: 'markAsUnread', spam: 'moveToSpam', archive: 'archiveMails' } as const;
+const messageIds = z.array(id).min(1).max(100).describe('Message IDs from list_messages or search_messages.');
 
 export const zohoMailTools = {
   'zoho_mail.list_accounts': tool('List the Zoho Mail accounts of the user with their account IDs and addresses. Call this first: every other tool needs an account_id.', true, {},
@@ -77,4 +82,14 @@ export const zohoMailTools = {
     { async run(i, context) { return sent(await context.call({ url: `${api(context)}/accounts/${e(i.account_id)}/messages/${e(i.message_id)}`, method: 'POST', body: await mail(i, context, { action: i.reply_all ? 'replyall' : 'reply' }) })); } }),
   'zoho_mail.create_draft': tool('Save an email to the Drafts folder without sending it, for the user to review in Zoho Mail.', false, compose,
     { async run(i, context) { return sent(await context.call({ url: `${api(context)}/accounts/${e(i.account_id)}/messages`, method: 'POST', body: await mail(i, context, { mode: 'draft' }) })); } }),
+  'zoho_mail.mark_messages': tool('Mark messages as read or unread, report them as spam (moves them to the Spam folder) or archive them.', false,
+    { account_id: account, message_ids: messageIds, action: z.enum(['read', 'unread', 'spam', 'archive']) },
+    { request: (i, context) => update(i, context, { mode: modes[i.action as keyof typeof modes] }), response: (_raw, i) => ({ updated: i.message_ids.length }) }, 'Zoho Mail: modify'),
+  'zoho_mail.move_messages': tool('Move messages to another folder, e.g. back to the Inbox from Spam. Folder IDs come from list_folders.', false,
+    { account_id: account, message_ids: messageIds, destination_folder_id: id.describe('Folder ID from list_folders.') },
+    { request: (i, context) => update(i, context, { mode: 'moveMessage', destfolderId: i.destination_folder_id }), response: (_raw, i) => ({ moved: i.message_ids.length }) }, 'Zoho Mail: modify'),
+  'zoho_mail.delete_message': tool('Delete a message: moves it to Trash, where the user can still restore it. permanent skips Trash and cannot be undone: confirm with the user first.', false,
+    { account_id: account, folder_id: id.describe('Folder ID of the message, from list_messages or search_messages.'), message_id: id, permanent: z.boolean().default(false) },
+    { request: (i, context) => ({ url: `${api(context)}/accounts/${e(i.account_id)}/folders/${e(i.folder_id)}/messages/${e(i.message_id)}${i.permanent ? '?expunge=true' : ''}`, method: 'DELETE' }),
+      response: (_raw, i) => ({ message_id: i.message_id, deleted: i.permanent ? 'permanently' : 'moved_to_trash' }) }, 'Zoho Mail: delete'),
 } as const satisfies Record<string, RestOperation>;

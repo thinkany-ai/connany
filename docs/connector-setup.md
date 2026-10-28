@@ -137,6 +137,8 @@ Zoho 没有支持动态注册的托管 MCP。管理员在 Zoho API Console 创�
 | `list_messages`、`search_messages` | 按文件夹列出（可筛选已读 / 未读），或用 Zoho 搜索语法（如 `sender:alice@example.com::has:attachment`）；用 `start` 翻页 |
 | `get_message` | 读取单封邮件，正文默认转为纯文本 |
 | `send_message`、`reply_message`、`create_draft`（写） | 发送、回复（可全部回复）、存为草稿；不填 `from_address` 时使用账户主地址 |
+| `mark_messages`、`move_messages`（写） | 批量标为已读 / 未读、举报为垃圾邮件、归档，或移到其他文件夹（如从垃圾箱移回收件箱） |
+| `delete_message`（写） | 删除邮件，默认移到回收站；`permanent: true` 彻底删除，不可恢复 |
 
 ## 其他官方托管 MCP 连接器
 

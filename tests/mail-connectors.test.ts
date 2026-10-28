@@ -14,7 +14,7 @@ test('mail tool catalogs are built in and mark writes',async()=>{
  const runtime=runtimeWith(()=>{throw new Error('no network');});
  const gmail=await runtime.tools('gmail',credential);const zoho=await runtime.tools('zoho_mail',credential);
  assert.deepEqual(gmail.filter(t=>!t.read_only).map(t=>t.name),['gmail.create_draft','gmail.send_draft','gmail.send_message','gmail.modify_labels']);
- assert.deepEqual(zoho.filter(t=>!t.read_only).map(t=>t.name),['zoho_mail.send_message','zoho_mail.reply_message','zoho_mail.create_draft']);
+ assert.deepEqual(zoho.filter(t=>!t.read_only).map(t=>t.name),['zoho_mail.send_message','zoho_mail.reply_message','zoho_mail.create_draft','zoho_mail.mark_messages','zoho_mail.move_messages','zoho_mail.delete_message']);
  for(const tool of [...gmail,...zoho]){assert(toolNamePattern.test(tool.name),tool.name);assert.equal(tool.input_schema.type,'object');}
  assert.equal(calls.length,0);
  const auth=new URL(runtime.authorizeUrl('gmail','state','verifier'));
@@ -106,6 +106,17 @@ test('Zoho Mail lists, reads and sends with the account address and explains err
  assert.equal(calls[2].url,'https://mail.zoho.com.au/api/accounts/1234/messages/9001');assert.equal(JSON.parse(String(calls[2].init.body)).action,'replyall');
  await runtime.execute('zoho_mail.create_draft',{account_id:'1234',from_address:'kim@example.com',to:['alice@example.com'],subject:'Draft',body:'<b>x</b>',html:true},zoho);
  const draft=JSON.parse(String(calls[3].init.body));assert.equal(draft.mode,'draft');assert.equal(draft.mailFormat,'html');
+ calls.length=0;
+ assert.deepEqual(await runtime.execute('zoho_mail.mark_messages',{account_id:'1234',message_ids:['1716466818827107400','9001'],action:'spam'},zoho),{updated:2});
+ assert.equal(calls[0].url,'https://mail.zoho.com.au/api/accounts/1234/updatemessage');assert.equal(calls[0].init.method,'PUT');
+ assert.deepEqual(JSON.parse(String(calls[0].init.body)),{mode:'moveToSpam',messageId:['1716466818827107400','9001']});
+ await runtime.execute('zoho_mail.mark_messages',{account_id:'1234',message_ids:['9001'],action:'read'},zoho);assert.equal(JSON.parse(String(calls[1].init.body)).mode,'markAsRead');
+ assert.deepEqual(await runtime.execute('zoho_mail.move_messages',{account_id:'1234',message_ids:['9001'],destination_folder_id:'55'},zoho),{moved:1});
+ assert.deepEqual(JSON.parse(String(calls[2].init.body)),{mode:'moveMessage',destfolderId:'55',messageId:['9001']});
+ assert.deepEqual(await runtime.execute('zoho_mail.delete_message',{account_id:'1234',folder_id:'55',message_id:'9001'},zoho),{message_id:'9001',deleted:'moved_to_trash'});
+ assert.equal(calls[3].url,'https://mail.zoho.com.au/api/accounts/1234/folders/55/messages/9001');assert.equal(calls[3].init.method,'DELETE');
+ await runtime.execute('zoho_mail.delete_message',{account_id:'1234',folder_id:'55',message_id:'9001',permanent:true},zoho);assert.equal(calls[4].url,'https://mail.zoho.com.au/api/accounts/1234/folders/55/messages/9001?expunge=true');
+ await assert.rejects(()=>runtime.execute('zoho_mail.mark_messages',{account_id:'1234',message_ids:['9001'],action:'delete'},zoho));
  await assert.rejects(()=>runtime.execute('zoho_mail.get_message',{account_id:'1234',folder_id:'77',message_id:'9001'},zoho),(error:any)=>{assert.equal(error.details.upstream_message,'Folder does not exist');return true;});
  await assert.rejects(()=>runtime.execute('zoho_mail.send_message',{account_id:'1234',to:['a@example.com,b@example.com'],subject:'x',body:'x'},zoho));
 });
