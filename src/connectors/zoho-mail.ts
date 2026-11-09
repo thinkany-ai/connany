@@ -76,9 +76,12 @@ async function upload(i: any, context: RestContext) {
     const stored = Array.isArray(raw.data) ? raw.data[0] : raw.data;
     if (!stored?.storeName || !stored.attachmentPath) throw new UpstreamError('invalid_upload_response');
     if (a.inline) {
-      if (typeof stored.url !== 'string' || !stored.url) throw new UpstreamError('invalid_upload_response');
-      body = body.replace(reference, (_m, quote) => `${quote}${stored.url.replace(/&/g, '&amp;').replace(/"/g, '&quot;')}${quote}`);
-    } else attached.push({ storeName: stored.storeName, attachmentPath: stored.attachmentPath, attachmentName: stored.attachmentName ?? name });
+      if (typeof stored.url !== 'string' || !stored.url || /["'<>\s]/.test(stored.url)) throw new UpstreamError('invalid_upload_response');
+      // Zoho escapes the attribute itself when it builds the message, so the URL goes in as returned.
+      body = body.replace(reference, (_m, quote) => `${quote}${stored.url}${quote}`);
+    }
+    // Inline images are listed too: Zoho embeds an image the body points at only when it is attached.
+    attached.push({ storeName: stored.storeName, attachmentPath: stored.attachmentPath, attachmentName: stored.attachmentName ?? name });
   }
   return { body, attachments: attached };
 }

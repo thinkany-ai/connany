@@ -143,8 +143,8 @@ test('zoho mail uploads attachments and inline images before sending',async()=>{
  assert.equal(new Headers(calls[1].init.headers).get('Content-Type'),'application/octet-stream');assert.deepEqual([...calls[1].init.body as Uint8Array],[137,80,78,71]);
  assert.equal(Buffer.from(calls[2].init.body as Uint8Array).toString(),'hello');assert.equal(new URL(calls[2].url).searchParams.get('isInline'),'false');
  const sent=JSON.parse(String(calls[3].init.body));
- assert.equal(sent.content,'<p>Scan:</p><img src="/zm/ImageSignature?fileName=1.png&amp;storeName=53862395&amp;frm=c" alt="QR"><p>WeChat ID: kim</p>');
- assert.deepEqual(sent.attachments,[{storeName:'53862395',attachmentPath:'/Mail/2-notes.txt',attachmentName:'notes.txt'}]);
+ assert.equal(sent.content,'<p>Scan:</p><img src="/zm/ImageSignature?fileName=1.png&storeName=53862395&frm=c" alt="QR"><p>WeChat ID: kim</p>');
+ assert.deepEqual(sent.attachments,[{storeName:'53862395',attachmentPath:'/compose/1-qr.png',attachmentName:'qr.png'},{storeName:'53862395',attachmentPath:'/Mail/2-notes.txt',attachmentName:'notes.txt'}]);
  const send=(attachments:unknown[],extra={})=>runtime.execute('zoho_mail.send_message',{account_id:'1234',from_address:'kim@example.com',to:['alice@example.com'],subject:'x',body:'<p>x</p>',html:true,attachments,...extra},zoho);
  await assert.rejects(()=>send([{url:'https://intranet.example.com/a.png'}]),{code:'attachment_unavailable'});
  await assert.rejects(()=>send([{url:'http://assets.example.com/qr.png'}]));
