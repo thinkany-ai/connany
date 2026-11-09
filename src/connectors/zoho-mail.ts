@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { UpstreamError } from '../errors.js';
+import { AppError, UpstreamError } from '../errors.js';
 import { decodeEntities, htmlToText, query, truncate, type RestContext, type RestOperation } from './rest.js';
 
 /**
@@ -30,18 +30,66 @@ const messages = (raw: any, i: any) => {
   const rows = (Array.isArray(raw.data) ? raw.data : []).map(summary);
   return { messages: rows, next_start: rows.length === i.limit ? i.start + i.limit : null };
 };
+/** Zoho's per-file limit for attachments sent through the API is 20 MB; base64 inline in tool arguments is capped lower. */
+const MAX_FILE = 20 * 1024 * 1024;
+const filename = z.string().min(1).max(255).regex(/^[^\\/\u0000-\u001f"]+$/, 'Use a file name without a path, e.g. report.pdf.');
+const attachment = z.object({
+  filename: filename.optional().describe('File name shown to the recipient. Required with content_base64; with url it defaults to the name in the URL.'),
+  url: z.string().max(2000).regex(/^https:\/\//, 'Use a public https:// URL.').optional().describe('Public https:// URL Connany downloads the file from (up to 20 MB).'),
+  content_base64: z.string().max(14_000_000).optional().describe('File content as base64 (a data: URL works too), up to 10 MB.'),
+  inline: z.boolean().default(false).describe('Show an image inside the HTML body instead of listing it as an attachment. Needs html: true and an <img src="cid:CONTENT_ID"> in body.'),
+  content_id: z.string().min(1).max(100).regex(/^[\w.@-]+$/).optional().describe('Name the body uses for an inline image, as <img src="cid:CONTENT_ID">. Defaults to filename.'),
+}).strict().refine(a => (a.url === undefined) !== (a.content_base64 === undefined), 'Give exactly one of url or content_base64.')
+  .refine(a => a.url !== undefined || a.filename !== undefined, 'filename is required with content_base64.');
 const compose = {
   account_id: account,
   from_address: address.optional().describe('Sender address of this account; defaults to its primary address.'),
   to: z.array(address).min(1).max(100), cc: z.array(address).max(100).default([]), bcc: z.array(address).max(100).default([]),
   subject: z.string().max(998).regex(/^[^\r\n]*$/), body: z.string().max(500000), html: z.boolean().default(false).describe('Send body as HTML instead of plain text.'),
+  attachments: z.array(attachment).max(10).default([]).describe('Files to attach, from a URL or base64. Images with inline: true appear inside the HTML body (most clients show them without "load external images"); the rest are listed as attachments.'),
 };
+function decode(value: string) {
+  const data = value.replace(/^data:[^,]*;base64,/i, '').replace(/\s+/g, '');
+  if (!/^[A-Za-z0-9+/_-]*={0,2}$/.test(data)) throw new AppError('invalid_attachment', 'content_base64 is not valid base64.');
+  const bytes = Buffer.from(data, 'base64');
+  if (!bytes.length) throw new AppError('invalid_attachment', 'content_base64 is empty.');
+  return bytes;
+}
+/**
+ * Uploads each attachment to Zoho (raw upload, one file per request), then returns the
+ * `attachments` entries for the message and the body with every inline image's `cid:` reference
+ * replaced by the URL Zoho gives inline uploads.
+ * https://www.zoho.com/mail/help/api/post-upload-attachments.html
+ */
+async function upload(i: any, context: RestContext) {
+  let body: string = i.body;
+  const attached: { storeName: string; attachmentPath: string; attachmentName: string }[] = [];
+  for (const a of i.attachments) {
+    if (a.inline && !i.html) throw new AppError('invalid_attachment', 'Inline images need html: true.');
+    const file = a.url === undefined ? { data: decode(a.content_base64), filename: a.filename } : await context.download(a.url, MAX_FILE);
+    const name = a.filename ?? (filename.safeParse(file.filename).success ? file.filename : undefined) ?? 'attachment';
+    if (file.data.byteLength > MAX_FILE) throw new AppError('attachment_too_large', `${name} is larger than 20 MB.`, 422);
+    const cid = a.content_id ?? name;
+    const reference = new RegExp(`(["'])cid:${cid.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\1`, 'g');
+    if (a.inline && !reference.test(body)) throw new AppError('invalid_attachment', `The body does not show inline image ${cid}: add <img src="cid:${cid}"> where it belongs.`);
+    const raw = await context.call({ url: `${api(context)}/accounts/${e(i.account_id)}/messages/attachments?${query({ fileName: name, isInline: a.inline })}`, method: 'POST', raw: { data: file.data, type: 'application/octet-stream' } });
+    const stored = Array.isArray(raw.data) ? raw.data[0] : raw.data;
+    if (!stored?.storeName || !stored.attachmentPath) throw new UpstreamError('invalid_upload_response');
+    if (a.inline) {
+      if (typeof stored.url !== 'string' || !stored.url) throw new UpstreamError('invalid_upload_response');
+      body = body.replace(reference, (_m, quote) => `${quote}${stored.url.replace(/&/g, '&amp;').replace(/"/g, '&quot;')}${quote}`);
+    } else attached.push({ storeName: stored.storeName, attachmentPath: stored.attachmentPath, attachmentName: stored.attachmentName ?? name });
+  }
+  return { body, attachments: attached };
+}
 async function mail(i: any, context: RestContext, extra: Record<string, unknown> = {}) {
   const from = i.from_address ?? (await context.call({ url: `${api(context)}/accounts/${e(i.account_id)}` })).data?.primaryEmailAddress;
+  const { body, attachments } = await upload(i, context);
   return { fromAddress: from, toAddress: i.to.join(','), ...(i.cc.length ? { ccAddress: i.cc.join(',') } : {}), ...(i.bcc.length ? { bccAddress: i.bcc.join(',') } : {}),
-    subject: i.subject, content: i.body, mailFormat: i.html ? 'html' : 'plaintext', ...extra };
+    subject: i.subject, content: body, mailFormat: i.html ? 'html' : 'plaintext', ...(attachments.length ? { attachments } : {}), ...extra };
 }
-const sent = (raw: any) => ({ message_id: raw.data?.messageId === undefined ? undefined : String(raw.data.messageId), status: raw.status?.description });
+const sent = (raw: any, i: any) => ({ message_id: raw.data?.messageId === undefined ? undefined : String(raw.data.messageId), status: raw.status?.description,
+  ...(i.attachments.length ? { attachments: i.attachments.length } : {}) });
 
 const tool = (description: string, read_only: boolean, shape: z.ZodRawShape, rest: Pick<RestOperation, 'request' | 'response' | 'run'>, permission = read_only ? 'Zoho Mail: read' : 'Zoho Mail: send'): RestOperation =>
   ({ connector: 'zoho_mail', description, read_only, required_permissions: [permission], schema: z.object(shape).strict(), ...rest });
@@ -75,13 +123,13 @@ export const zohoMailTools = {
       const { text: body, truncated } = truncate(i.format === 'html' ? html : htmlToText(html), i.max_body_chars);
       return { ...summary({ messageId: i.message_id, folderId: i.folder_id, ...details.data }), body, ...(truncated ? { body_truncated: true } : {}) };
     } }),
-  'zoho_mail.send_message': tool('Send an email from a Zoho Mail account. Sending cannot be undone: confirm recipients and content with the user first.', false, compose,
-    { async run(i, context) { return sent(await context.call({ url: `${api(context)}/accounts/${e(i.account_id)}/messages`, method: 'POST', body: await mail(i, context) })); } }),
+  'zoho_mail.send_message': tool('Send an email from a Zoho Mail account, with optional attachments and inline images. Sending cannot be undone: confirm recipients and content with the user first.', false, compose,
+    { async run(i, context) { return sent(await context.call({ url: `${api(context)}/accounts/${e(i.account_id)}/messages`, method: 'POST', body: await mail(i, context) }), i); } }),
   'zoho_mail.reply_message': tool('Reply to a message from a Zoho Mail account; the reply stays in the same conversation. Confirm recipients and content with the user first.', false,
     { ...compose, message_id: id.describe('Message to reply to.'), reply_all: z.boolean().default(false) },
-    { async run(i, context) { return sent(await context.call({ url: `${api(context)}/accounts/${e(i.account_id)}/messages/${e(i.message_id)}`, method: 'POST', body: await mail(i, context, { action: i.reply_all ? 'replyall' : 'reply' }) })); } }),
+    { async run(i, context) { return sent(await context.call({ url: `${api(context)}/accounts/${e(i.account_id)}/messages/${e(i.message_id)}`, method: 'POST', body: await mail(i, context, { action: i.reply_all ? 'replyall' : 'reply' }) }), i); } }),
   'zoho_mail.create_draft': tool('Save an email to the Drafts folder without sending it, for the user to review in Zoho Mail.', false, compose,
-    { async run(i, context) { return sent(await context.call({ url: `${api(context)}/accounts/${e(i.account_id)}/messages`, method: 'POST', body: await mail(i, context, { mode: 'draft' }) })); } }),
+    { async run(i, context) { return sent(await context.call({ url: `${api(context)}/accounts/${e(i.account_id)}/messages`, method: 'POST', body: await mail(i, context, { mode: 'draft' }) }), i); } }),
   'zoho_mail.mark_messages': tool('Mark messages as read or unread, report them as spam (moves them to the Spam folder) or archive them.', false,
     { account_id: account, message_ids: messageIds, action: z.enum(['read', 'unread', 'spam', 'archive']) },
     { request: (i, context) => update(i, context, { mode: modes[i.action as keyof typeof modes] }), response: (_raw, i) => ({ updated: i.message_ids.length }) }, 'Zoho Mail: modify'),

@@ -5,12 +5,19 @@ import type { z } from 'zod';
  * services without a hosted MCP server (Google, Zoho). Each tool is either one request with an
  * optional reshaping of the response, or a `run` that makes several requests through `call`.
  */
-export interface RestRequest { url: string; method?: string; body?: unknown }
+/** `body` is sent as JSON; `raw` sends bytes as they are, for file uploads. */
+export interface RestRequest { url: string; method?: string; body?: unknown; raw?: { data: Uint8Array; type: string } }
+export interface Download { data: Uint8Array; type?: string; filename?: string }
 export interface RestContext {
   /** Accounts server the user authorized with, for services with regional data centers (Zoho). */
   server?: string;
   /** Sends a request with the user's token and returns the parsed JSON body. */
   call: (request: RestRequest) => Promise<any>;
+  /**
+   * Fetches a public https:// file without the user's token, e.g. an image an agent wants to
+   * attach. Hosts resolving to private addresses are refused, redirects are not followed.
+   */
+  download: (url: string, maxBytes: number) => Promise<Download>;
 }
 export interface RestOperation {
   connector: 'google_search_console' | 'google_analytics' | 'gmail' | 'zoho_mail' | 'google_calendar' | 'google_drive' | 'google_sheets' | 'google_docs' | 'outlook' | 'microsoft_365';

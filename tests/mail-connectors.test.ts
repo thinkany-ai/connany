@@ -120,3 +120,39 @@ test('Zoho Mail lists, reads and sends with the account address and explains err
  await assert.rejects(()=>runtime.execute('zoho_mail.get_message',{account_id:'1234',folder_id:'77',message_id:'9001'},zoho),(error:any)=>{assert.equal(error.details.upstream_message,'Folder does not exist');return true;});
  await assert.rejects(()=>runtime.execute('zoho_mail.send_message',{account_id:'1234',to:['a@example.com,b@example.com'],subject:'x',body:'x'},zoho));
 });
+
+test('zoho mail uploads attachments and inline images before sending',async()=>{
+ const zoho={accessToken:'zat',server:'https://accounts.zoho.com'};
+ const lookup=async(host:string)=>[{address:host==='intranet.example.com'?'10.0.0.5':'93.184.216.34',family:4}];
+ let uploads=0;
+ const runtime=new ConnectorRuntime({...config,connectors:clients},async(url,init)=>{
+  const u=String(url);calls.push({url:u,init:init!});
+  if(u==='https://assets.example.com/qr.png')return new Response(new Uint8Array([137,80,78,71]),{headers:{'content-type':'image/png'}});
+  if(u.includes('/messages/attachments')){uploads++;const inline=new URL(u).searchParams.get('isInline')==='true';const name=new URL(u).searchParams.get('fileName');
+   return Response.json({status:{code:200},data:{storeName:'53862395',attachmentPath:`/${inline?'compose':'Mail'}/${uploads}-${name}`,attachmentName:name,...(inline?{url:'/zm/ImageSignature?fileName=1.png&storeName=53862395&frm=c'}:{})}});}
+  return Response.json({status:{code:200,description:'success'},data:{messageId:9100}});
+ },lookup);
+ calls.length=0;
+ const result=await runtime.execute('zoho_mail.send_message',{account_id:'1234',from_address:'kim@example.com',to:['alice@example.com'],subject:'QR',html:true,
+  body:'<p>Scan:</p><img src="cid:qr.png" alt="QR"><p>WeChat ID: kim</p>',
+  attachments:[{url:'https://assets.example.com/qr.png',inline:true},{filename:'notes.txt',content_base64:'data:text/plain;base64,'+Buffer.from('hello').toString('base64')}]},zoho);
+ assert.deepEqual(result,{message_id:'9100',status:'success',attachments:2});
+ assert.equal(calls[0].url,'https://assets.example.com/qr.png');assert.equal(new Headers(calls[0].init.headers).get('Authorization'),null);
+ const inline=new URL(calls[1].url);assert.equal(inline.origin+inline.pathname,'https://mail.zoho.com/api/accounts/1234/messages/attachments');
+ assert.equal(inline.searchParams.get('fileName'),'qr.png');assert.equal(inline.searchParams.get('isInline'),'true');
+ assert.equal(new Headers(calls[1].init.headers).get('Content-Type'),'application/octet-stream');assert.deepEqual([...calls[1].init.body as Uint8Array],[137,80,78,71]);
+ assert.equal(Buffer.from(calls[2].init.body as Uint8Array).toString(),'hello');assert.equal(new URL(calls[2].url).searchParams.get('isInline'),'false');
+ const sent=JSON.parse(String(calls[3].init.body));
+ assert.equal(sent.content,'<p>Scan:</p><img src="/zm/ImageSignature?fileName=1.png&amp;storeName=53862395&amp;frm=c" alt="QR"><p>WeChat ID: kim</p>');
+ assert.deepEqual(sent.attachments,[{storeName:'53862395',attachmentPath:'/Mail/2-notes.txt',attachmentName:'notes.txt'}]);
+ const send=(attachments:unknown[],extra={})=>runtime.execute('zoho_mail.send_message',{account_id:'1234',from_address:'kim@example.com',to:['alice@example.com'],subject:'x',body:'<p>x</p>',html:true,attachments,...extra},zoho);
+ await assert.rejects(()=>send([{url:'https://intranet.example.com/a.png'}]),{code:'attachment_unavailable'});
+ await assert.rejects(()=>send([{url:'http://assets.example.com/qr.png'}]));
+ await assert.rejects(()=>send([{url:'https://assets.example.com/qr.png',inline:true}]),{code:'invalid_attachment'});
+ await assert.rejects(()=>send([{url:'https://assets.example.com/qr.png',inline:true,content_id:'qr'}],{body:'<img src="cid:qr">',html:false}),{code:'invalid_attachment'});
+ await assert.rejects(()=>send([{content_base64:'aGVsbG8='}]));
+ await assert.rejects(()=>send([{filename:'a.txt',content_base64:'not base64!'}]),{code:'invalid_attachment'});
+ calls.length=0;
+ await runtime.execute('zoho_mail.reply_message',{account_id:'1234',message_id:'9001',from_address:'kim@example.com',to:['alice@example.com'],subject:'Re',body:'see file',attachments:[{filename:'a.txt',content_base64:'aGVsbG8='}]},zoho);
+ assert.equal(JSON.parse(String(calls[1].init.body)).attachments[0].attachmentName,'a.txt');
+});

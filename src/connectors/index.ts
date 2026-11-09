@@ -8,7 +8,7 @@ import { microsoft365Tools } from './microsoft-365.js';
 import { outlookTools } from './outlook.js';
 import { gmailTools } from './gmail.js';
 import { zohoMailTools } from './zoho-mail.js';
-import type { RestOperation, RestRequest } from './rest.js';
+import type { Download, RestOperation, RestRequest } from './rest.js';
 import type { Config } from '../config.js';
 import { connector as definition, connectorNames, isCustomConnector, type AnyConnector } from './catalog.js';
 import { guardFetch, systemLookup, type HostLookup } from './remote-mcp.js';
@@ -96,6 +96,28 @@ export class ConnectorRuntime {
     }
     return body;
   }
+  /** A public file for a tool to pass on (an attachment), never sent with credentials. */
+  private async download(raw: string, maxBytes: number): Promise<Download> {
+    let response: Response;
+    try { response = await guardFetch(this.fetcher, this.lookup, this.config.customMcpAllowFakeIp)(raw, { signal: AbortSignal.timeout(15000) }); }
+    catch (error) {
+      const reason = ({ invalid_server_url: 'only https:// URLs without credentials are accepted', server_unreachable: 'the host could not be resolved', server_not_public: 'the host is not on the public internet' } as Record<string, string>)[error instanceof AppError ? error.code : ''] ?? 'the server did not answer';
+      throw new AppError('attachment_unavailable', `Could not download ${raw.slice(0, 200)}: ${reason}. Use a public https:// URL, or pass the file as content_base64.`, 422);
+    }
+    if (!response.ok) { await response.body?.cancel().catch(() => {}); throw new AppError('attachment_unavailable', `Downloading ${raw.slice(0, 200)} failed with HTTP ${response.status}.`, 422); }
+    const tooLarge = () => new AppError('attachment_too_large', `${raw.slice(0, 200)} is larger than ${Math.floor(maxBytes / 1048576)} MB.`, 422);
+    if (Number(response.headers.get('content-length')) > maxBytes) { await response.body?.cancel().catch(() => {}); throw tooLarge(); }
+    const chunks: Uint8Array[] = []; let size = 0;
+    for await (const chunk of response.body ?? []) {
+      size += chunk.byteLength;
+      if (size > maxBytes) { await response.body?.cancel().catch(() => {}); throw tooLarge(); }
+      chunks.push(chunk);
+    }
+    const disposition = response.headers.get('content-disposition')?.match(/filename\*?=(?:UTF-8'')?"?([^";]+)"?/i)?.[1];
+    let filename: string | undefined;
+    try { filename = disposition ? decodeURIComponent(disposition) : decodeURIComponent(new URL(raw).pathname.split('/').pop() || '') || undefined; } catch { filename = undefined; }
+    return { data: Buffer.concat(chunks), type: response.headers.get('content-type')?.split(';')[0].trim() || undefined, filename };
+  }
   private async token(connector: AnyConnector, fields: Record<string, string>, old?: Credentials, server = old?.server) {
     const app = this.client(connector);
     const spec = definition(connector);
@@ -166,9 +188,10 @@ export class ConnectorRuntime {
       const operation = restOperations[name];
       const parsed = operation.schema.parse(input);
       const authorization = `${definition(operation.connector).oauth?.tokenType || 'Bearer'} ${credential.accessToken}`;
-      const call = (request: RestRequest) => this.request(request.url, { method: request.method || 'GET', headers: { Authorization: authorization, Accept: 'application/json', ...(request.body === undefined ? {} : { 'Content-Type': 'application/json' }) },
-        ...(request.body === undefined ? {} : { body: JSON.stringify(request.body) }) });
-      const context = { server: credential.server, call };
+      const call = (request: RestRequest) => this.request(request.url, { method: request.method || 'GET',
+        headers: { Authorization: authorization, Accept: 'application/json', ...(request.raw ? { 'Content-Type': request.raw.type } : request.body === undefined ? {} : { 'Content-Type': 'application/json' }) },
+        ...(request.raw ? { body: request.raw.data as Uint8Array<ArrayBuffer> } : request.body === undefined ? {} : { body: JSON.stringify(request.body) }) });
+      const context = { server: credential.server, call, download: (url: string, maxBytes: number) => this.download(url, maxBytes) };
       if (operation.run) return operation.run(parsed, context);
       const raw = await call(operation.request!(parsed, context));
       return operation.response ? operation.response(raw, parsed) : raw;
