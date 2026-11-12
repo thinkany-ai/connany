@@ -91,6 +91,16 @@ export function createApp(service: Service) {
   });
   app.get('/favicon.svg', c => { c.header('Content-Type', 'image/svg+xml'); return c.body(favicon); });
   app.get('/', c => c.redirect('/admin', 302));
+  // Domain ownership checks (WeChat's domain appeal and the like): a
+  // `<32 hex>.txt` dropped in public/verify/ is served at the root.
+  app.get('/:file', async (c, next) => {
+    const file = c.req.param('file');
+    if (!/^[0-9a-f]{32}\.txt$/.test(file)) return next();
+    const body = await readFile(`public/verify/${file}`, 'utf8').catch(() => null);
+    if (body === null) return c.notFound();
+    c.header('Content-Type', 'text/plain; charset=utf-8');
+    return c.body(body);
+  });
   mountMcp(app, service);
   app.get('/health', async c => { await service.pool.query('SELECT 1'); return c.json({ status: 'ok', version: '0.1.0' }); });
   app.use('/v1/*', async (c, next) => {
